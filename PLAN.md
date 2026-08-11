@@ -273,21 +273,18 @@ salary-prediction-big-data/
 
 > **Current actual layout (2026-08-11).** The skeleton exists (`data/{raw,samples,
 > processed}/`, `models/`, `checkpoints/`, `config/settings.py`, `scripts/`, `tests/` —
-> see Phase 1 in §24), and Phases 2–5 have real, tested code in it:
+> see Phase 1 in §24), and Phases 2–5 have real, tested code in it, **now confirmed
+> working end-to-end against the real 89,184-row dataset on the actual VM** (§23 #15):
 > `src/common/{logging_config,spark_session,schemas,feature_config,spark_utils}.py`,
 > `src/exploration/explore_dataset.py`, `src/training/{data_loader,data_cleaning,
 > feature_pipeline,data_split,model_candidates,tune_models,select_best_model,
-> train_final_model,evaluate_model}.py`, plus 24 passing pytest tests across
-> `tests/test_{cleaning,features,schema,model_candidates,select_best_model,
-> training_pipeline}.py`. `src/{producers,streaming,dashboard}/` are still empty
-> packages — Phase 7 (streaming) logic still only exists as the notebook prototype in the
-> separate `big_data_project/` folder (`notebooks/`, `data/`) described in §23, not yet
-> ported in. The raw CSV is now extracted into this repo's `data/raw/` (§24 Phase 1.3,
-> local-only/gitignored), but an actual end-to-end run against it is blocked on this
-> Windows dev machine by a missing `winutils.exe` (§23 Known Issue #10) — so none of the
-> ported exploration/cleaning/training code has been run against the real 89,184-row file
-> yet, only against small in-memory/synthetic samples in tests. That real-data run is the
-> next validation step, on the VM.
+> train_final_model,evaluate_model}.py`, plus 30 passing pytest tests. `models/` now has
+> real content from that run (`model_comparison.csv`, `model_metadata.json`,
+> `model_metrics.json`, `best_salary_model/`), though model quality itself is weak (R²≈0,
+> RMSE outlier-dominated) — see §23 #15, the agreed next step is real outlier handling.
+> `src/{producers,streaming,dashboard}/` are still empty packages — Phase 7 (streaming)
+> logic still only exists as the notebook prototype in the separate `big_data_project/`
+> folder (`notebooks/`, `data/`) described in §23, not yet ported in.
 
 ## 8. Kafka Topics and Message Contracts
 
@@ -362,6 +359,12 @@ of silently proceeding.
 8. Investigate extreme outliers using approximate quantiles.
 9. Choose either controlled outlier filtering or `log1p` transformation of the target,
    and document the choice.
+   > **Under revisit (2026-08-11).** The log1p-only choice documented in
+   > `src/training/data_cleaning.py` and §23 Known Issue #15 wasn't sufficient on its
+   > own — the first real-data training run showed every model's RMSE dominated by
+   > extreme salary values (max $74,351,432 in this dataset) even with log1p applied.
+   > **Next session:** add real outlier filtering (cap and/or remove extreme values)
+   > alongside log1p, then re-run Phase 4/5 and compare. See §23 for the full numbers.
 10. Save row counts before and after every major cleaning step.
 
 ## 11. Feature Engineering
@@ -592,6 +595,16 @@ DASHBOARD_PREDICTION_TIMEOUT_SECONDS=30
 
 ## 23. Status / Next Step
 
+**Next session starts with: implementing real outlier handling for the target
+(`ConvertedCompYearly`).** §10.9 originally chose log1p-only (no hard filtering), based
+on the notebook prototype's results. The first successful real-data run of the full
+Phase 4/5 pipeline (2026-08-11, §23 #15 below) shows that decision isn't sufficient on
+its own: every model's R² is ≈0 and RMSE (~700K) is wildly out of proportion to MAE
+(~43-49K), consistent with one or a few extreme salary values (max in this dataset:
+$74,351,432) dominating the metric. Revisit §10.8-10.9: likely a hard cap/removal of
+extreme values in addition to (or instead of) log1p, then re-run Phase 4/5 to see if
+RMSE/R² improve. See §23 #15 for the full numbers and reasoning.
+
 Completed so far (investigation only, per the plan's own "begin with investigation and
 planning only" instruction):
 - Confirmed `data.zip` contains `survey_results_public.csv` (89,184 rows, 84 columns) and
@@ -760,6 +773,75 @@ before treating any of it as final.
     Fixed the same way (reusing `is_missing_text()`), verified with a new test
     (`test_top_values_excludes_na_sentinel`), not yet re-confirmed against real data (low
     risk — same fix pattern, already proven correct once this session).
+13. **Found and fixed running on the real VM (2026-08-11).** `run_training_pipeline()`
+    crashed with `Py4JJavaError: ... ConnectionRefusedError: [Errno 111] Connection
+    refused` inside `CrossValidator._fit()`, reproduced twice (including mid-
+    `RandomForestRegressor`). Root cause: `CrossValidator` fits each fold from a
+    background thread (even at its default `parallelism=1`), and that thread needs its
+    own fresh py4j socket connection back to the JVM gateway — unreliable under load in
+    this VM's Jupyter kernel environment, even though every same-thread Spark call worked
+    fine throughout. Fixed by replacing `CrossValidator` with a hand-rolled sequential
+    k-fold loop (`src/training/tune_models.py: cross_validate()`) that does identical
+    fold-splitting/fit/evaluate/refit-on-all-data work entirely on the calling thread. No
+    performance cost — `parallelism=1` meant `CrossValidator` never actually ran folds
+    concurrently anyway.
+14. **Found and fixed running on the real VM (2026-08-11).** After #13's fix,
+    `RandomForestRegressor` then failed with a genuine
+    `java.lang.OutOfMemoryError: Java heap space` inside `RandomForests.findBestSplits`
+    (`collectAsMap`). Two contributing causes, both fixed:
+    - `Employment` (originally in `SINGLE_VALUE_CATEGORICAL_COLUMNS`) is actually a
+      `;`-separated multi-select field (`"Employed, full-time;Student, part-time"`), not
+      single-valued — one-hot-encoding it treated every unique *combination* as its own
+      category, inflating it to ~107 dimensions in the real data (vs. ~9 real underlying
+      statuses). Moved to the same `RegexTokenizer` + `CountVectorizer` treatment as the
+      skill columns (now `MULTI_VALUE_COLUMNS` in `feature_config.py`) — both a
+      correctness fix (each status is now its own meaningful boolean signal instead of an
+      arbitrary combination id) and a large cut in feature-vector width.
+    - The tuning grids and CV fold count were reduced (`NUM_FOLDS` 3→2; each model now
+      tunes one hyperparameter over 2 values instead of two hyperparameters/~4
+      combinations) — 5 pipeline fits per model instead of 13, 20 total instead of 52.
+      Also cut total wall-clock time substantially, which was a separate complaint (a
+      single `LinearRegression` tuning pass was taking ~86s even before the OOM).
+    Verified: 24/24 tests passing locally, and **the user then successfully ran the full
+    `run_training_pipeline()` against the real 89,184-row dataset in the VM notebook —
+    see #15.**
+15. **First successful full run against real data, VM notebook (2026-08-11).** Split
+    sizes: cv_train 28,696 / validation 9,685 / test 9,635 (of 48,016 cleaned rows — 3
+    fewer than the 48,019 in §2, from de-duplication now happening during cleaning, which
+    earlier ad hoc checks didn't include). All 4 models tuned successfully:
+
+    | Model | Validation RMSE | Validation MAE | Validation R² | Best params |
+    |---|---|---|---|---|
+    | LinearRegression (selected) | 700,079 | 43,702 | 0.0025 | regParam=0.1 |
+    | DecisionTreeRegressor | 700,162 | 49,037 | 0.0022 | maxDepth=10 |
+    | RandomForestRegressor | 700,212 | 49,768 | 0.0021 | numTrees=20 |
+    | GBTRegressor | 702,852 | 48,466 | -0.0055 | maxIter=20 |
+
+    Final test evaluation (touched once) for the selected `LinearRegression`: RMSE
+    760,542, MAE 39,209, R² 0.0039. All output artifacts written correctly:
+    `models/model_comparison.csv`, `models/model_metadata.json`,
+    `models/model_metrics.json`, `models/best_salary_model/`.
+
+    **Honest read of these numbers (this is the real finding, not just a log entry):**
+    - **R² is ≈0 for every model** (max 0.0025, one model even negative) — essentially no
+      better than predicting the mean salary for everyone. This isn't a bug; it matches
+      the notebook prototype's R²≈0.012 too. These features just don't explain much
+      variance in this self-reported salary data.
+    - **The RMSE (~700K) vs. MAE (~43-49K) gap is extreme** (16x) — the math points
+      squarely at outlier domination: this dataset's max salary is $74,351,432 (almost
+      certainly a data-entry error, not real), and a single such value landing in a
+      ~9,700-row validation/test split is enough on its own to produce an RMSE in this
+      exact range. MAE (outlier-robust) is far more trustworthy here, and it's consistent
+      with the notebook prototype's ~47-50K figures.
+    - **Which model "won" is close to meaningless** — all four are statistically
+      indistinguishable (R² within 0.008 of each other); `LinearRegression` won by noise,
+      not a real edge.
+    - **This is good evidence for revisiting the §10.9 outlier decision.** That section
+      chose log1p-only (no hard filtering) based on the notebook prototype's results;
+      this real run suggests log1p alone isn't containing the effect of extreme-value
+      rows on RMSE. **Agreed next step (2026-08-11): implement real outlier handling**
+      (capping and/or removing extreme salaries like the $74M row) as the next thing to
+      work on, before doing anything else with Phase 4/5.
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -847,46 +929,52 @@ work through together. Checked items are done; unchecked items are next.
   (not yet re-run against the VM's exact Spark 3.3.0)
 
 ### Phase 4 — Train and tune candidate models
-- [x] 4.1 `src/training/model_candidates.py` (2026-08-11) — all 4 required models
-      (LinearRegression, DecisionTreeRegressor, RandomForestRegressor, GBTRegressor),
-      each with a real `ParamGridBuilder` grid (~4 combinations, deliberately small —
-      "sized for the available machine" per §12; widen on the VM)
-- [x] 4.2 `src/training/data_split.py` + `tune_models.py` (2026-08-11) — real
-      `CrossValidator(numFolds=3)` per model, fit only on the `cv_train` slice (60% of the
-      cleaned dataset; see `data_split.py`), tuned against log-space RMSE. This is the
+- [x] 4.1 `src/training/model_candidates.py` — all 4 required models (LinearRegression,
+      DecisionTreeRegressor, RandomForestRegressor, GBTRegressor), each tuning one
+      hyperparameter over 2 values (others fixed via constructor) — reduced from ~4
+      combinations/2 hyperparameters after real runtime/memory problems on the VM (§23
+      Known Issues #13/#14); "sized for the available machine" per §12 in practice, not
+      just in theory. Widen again once a run comfortably completes with room to spare
+- [x] 4.2 `src/training/data_split.py` + `tune_models.py` — real k-fold cross-validation
+      (`NUM_FOLDS=2`) per model, fit only on the `cv_train` slice (60% of the cleaned
+      dataset), tuned against log-space RMSE. Implemented as a hand-rolled sequential loop
+      rather than `pyspark.ml.tuning.CrossValidator` — see Known Issue #13. This is the
       fix for Known Issues #1 and #2 in §23
 - [x] 4.3 `tune_models.tune_all_candidates()` produces the comparison data (real-scale
-      RMSE/MAE/R² per model, evaluated on the `validation` slice — data CrossValidator
-      never saw) plus `evaluate_mean_baseline()` for the §13 naive baseline;
+      RMSE/MAE/R² per model, evaluated on the `validation` slice — data the CV step never
+      saw) plus `evaluate_mean_baseline()` for the §13 naive baseline;
       `evaluate_model.write_model_comparison()` writes it to the exact
       `models/model_comparison.csv` path/schema §12 specifies
-- **Completion check:** comparison table produced — **met**, with real tuning. Code is
-  unit-tested (`tests/test_model_candidates.py`, `tests/test_training_pipeline.py`) but
-  **not yet run against the real 89,184-row dataset** (blocked on 1.3)
+- **Completion check:** comparison table produced — **met, and confirmed against the real
+  89,184-row dataset on the VM (2026-08-11, §23 Known Issue #15)**: all 4 models tuned
+  successfully, real RMSE/MAE/R² per model recorded. R² near zero for every model —
+  see #15 for the honest read of what that means and the outlier-handling follow-up
 
 ### Phase 5 — Select winner and final test evaluation
-- [x] 5.1 `src/training/select_best_model.py` (2026-08-11) — RMSE → MAE → R² tie-break
-      rule from §12, with a relative-tolerance tie check (floats essentially never match
-      exactly). Unit-tested directly, including both tie-break branches
-      (`tests/test_select_best_model.py`)
-- [x] 5.2 `src/training/train_final_model.py` (2026-08-11) — refits the selected model
-      type + hyperparameters on `cv_train + validation` combined, evaluates **exactly
-      once** on the untouched `test` slice, reverses `log1p` via `expm1` with negative/NaN
-      clipping (§13). This closes the "evaluate once on untouched test data" gap — Known
-      Issue #1 in §23 is now resolved
-- [x] 5.3 `src/training/evaluate_model.py` (2026-08-11) — writes
-      `models/model_metadata.json` and `models/model_metrics.json` in the exact §12
-      schema (selected model, selection metric, best params, validation + test metrics,
-      target column/transformation, feature version, timestamp) and saves the full
+- [x] 5.1 `src/training/select_best_model.py` — RMSE → MAE → R² tie-break rule from §12,
+      with a relative-tolerance tie check. Unit-tested directly, including both tie-break
+      branches (`tests/test_select_best_model.py`); confirmed on real data (§23 #15) —
+      `LinearRegression` selected, though the 4 models were statistically indistinguishable
+- [x] 5.2 `src/training/train_final_model.py` — refits the selected model type +
+      hyperparameters on `cv_train + validation` combined, evaluates **exactly once** on
+      the untouched `test` slice, reverses `log1p` via `expm1` with negative/NaN clipping
+      (§13). This closes the "evaluate once on untouched test data" gap — Known Issue #1
+      in §23 is now resolved. Confirmed on real data: final test RMSE 760,542 / MAE
+      39,209 / R² 0.0039
+- [x] 5.3 `src/training/evaluate_model.py` — writes `models/model_metadata.json` and
+      `models/model_metrics.json` in the exact §12 schema and saves the full
       `PipelineModel` via `.write().overwrite().save(...)` to `models/best_salary_model/`.
-      Verified with a dummy-data smoke test producing well-formed CSV/JSON; not yet run
-      end-to-end against real data
+      **Confirmed on the real VM run (2026-08-11):** all 4 output artifacts written
+      correctly against the real 48,016-row cleaned dataset, not just the earlier
+      dummy-data smoke test
 - [ ] 5.4 `scripts/train_and_select_model.sh` wiring Phases 3–5 together — not started
-      (the Python entry point exists: `python -m src.training.evaluate_model`; the shell
-      wrapper around it for the VM is what's missing)
-- **Completion check:** best PipelineModel and metadata saved — **met** by the code path
-  (`evaluate_model.run_training_pipeline()`); not yet exercised against the real dataset,
-  and 5.4's shell wrapper is still outstanding
+      (the Python entry point exists and works: `python -m src.training.evaluate_model`
+      / `run_training_pipeline()`; the shell wrapper around it for the VM is what's
+      missing)
+- **Completion check:** best PipelineModel and metadata saved — **met and confirmed
+  against real data**. Only 5.4's shell wrapper remains outstanding. **Model quality
+  itself is weak (R²≈0, RMSE outlier-dominated) — implementing real outlier handling is
+  the agreed next step (§23 #15) before doing anything else here.**
 
 ### Phase 6 — Kafka dataset producer
 - [ ] 6.1 `src/producers/dataset_producer.py` — reads CSV gradually, adds `event_id`/
