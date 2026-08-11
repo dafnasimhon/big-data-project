@@ -1,5 +1,7 @@
 """Loads the raw Stack Overflow survey CSV as a Spark DataFrame."""
 
+from __future__ import annotations
+
 from pyspark.sql import DataFrame, SparkSession
 
 from config import settings

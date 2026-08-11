@@ -9,6 +9,8 @@ actually being shipped, without ever letting the test set influence which model 
 hyperparameters were chosen.
 """
 
+from __future__ import annotations
+
 from pyspark.ml import Pipeline, PipelineModel
 from pyspark.ml.regression import (
     DecisionTreeRegressor,

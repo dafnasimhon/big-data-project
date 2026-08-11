@@ -14,6 +14,8 @@ For each of the 4 required candidates:
 final evaluation of the already-selected winner (§23 Known Issue #1 fix).
 """
 
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
 

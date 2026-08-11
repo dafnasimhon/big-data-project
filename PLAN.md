@@ -282,10 +282,12 @@ salary-prediction-big-data/
 > training_pipeline}.py`. `src/{producers,streaming,dashboard}/` are still empty
 > packages — Phase 7 (streaming) logic still only exists as the notebook prototype in the
 > separate `big_data_project/` folder (`notebooks/`, `data/`) described in §23, not yet
-> ported in. The raw CSV itself also hasn't been copied into this repo's `data/raw/` yet
-> (§24 Phase 1.3), so none of the ported exploration/cleaning/training code has been run
-> end-to-end against the real 89,184-row file here — only against small in-memory/
-> synthetic samples in tests.
+> ported in. The raw CSV is now extracted into this repo's `data/raw/` (§24 Phase 1.3,
+> local-only/gitignored), but an actual end-to-end run against it is blocked on this
+> Windows dev machine by a missing `winutils.exe` (§23 Known Issue #10) — so none of the
+> ported exploration/cleaning/training code has been run against the real 89,184-row file
+> yet, only against small in-memory/synthetic samples in tests. That real-data run is the
+> next validation step, on the VM.
 
 ## 8. Kafka Topics and Message Contracts
 
@@ -708,6 +710,28 @@ before treating any of it as final.
    are stable across that range, but two real bugs (#7, #8) were only found by actually
    running code, not by inspection — treat this as a real risk, not a formality, until
    it's run there.
+10. **Found and fixed running on the real VM (2026-08-11).** Eight files used
+    `str | None`-style union type hints (PEP 604, Python 3.10+ only) — these crash with
+    `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'` at import time
+    on the VM's older Python, since default-argument annotations are evaluated eagerly.
+    Fixed by adding `from __future__ import annotations` to
+    `src/common/spark_session.py`, `src/training/{data_loader,data_split,
+    train_final_model,evaluate_model,tune_models,select_best_model,
+    model_candidates}.py` — this defers annotation evaluation so the exact Python
+    version stops mattering. Confirms Known Issue #9 wasn't just caution: running
+    on the real target environment immediately surfaced a bug local testing couldn't.
+11. **Full run against the real dataset is blocked on this Windows dev machine, not by
+    code.** `data/raw/survey_results_public.csv` was extracted from `data.zip` here
+    (2026-08-11) and `src/exploration/explore_dataset.py` was attempted against the real
+    89,184-row file — it failed with `HADOOP_HOME and hadoop.home.dir are unset`.
+    Any Spark operation that *writes files* (the exploration CSV report, and
+    `PipelineModel.save()` in `evaluate_model.py`) needs Hadoop's `winutils.exe` on
+    Windows; it isn't installed here. This doesn't affect the target Linux VM at all (no
+    winutils needed there) and isn't a code defect — but it means **no part of Phases
+    2–5 has actually been run against the real dataset yet**, only against small
+    synthetic/in-memory samples in tests. This is the next real validation step, to be
+    done on the VM (or after installing `winutils.exe` locally, if that's ever wanted for
+    faster local iteration).
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -723,9 +747,10 @@ work through together. Checked items are done; unchecked items are next.
       `.gitignore`. This is now the single canonical project root — the notebook
       prototype from §23 still lives in the separate `big_data_project/` folder and has
       **not** been merged/ported in yet
-- [ ] 1.3 Extract `survey_results_public.csv` from `data.zip` into `data/raw/` — not done
-      yet (the prototype instead reads its own copy of the CSV from
-      `big_data_project/data/`)
+- [x] 1.3 Extracted `survey_results_public.csv` from `data.zip` into `data/raw/`
+      (2026-08-11, local to this dev machine only — correctly excluded from git by
+      `.gitignore`; the VM and any other clone needs to run this same extraction step,
+      it's not something a fresh checkout carries with it)
 - [x] 1.4 `config/settings.py` — loads all §19 env vars via `python-dotenv` with the same
       defaults as `.env.example`; verified it imports and resolves defaults correctly
 - [x] 1.5 `src/common/logging_config.py` — `get_logger(name)` with consistent formatting

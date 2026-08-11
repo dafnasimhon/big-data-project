@@ -1,5 +1,7 @@
 """Builds the project's SparkSession from config/settings.py (PLAN.md rule 5)."""
 
+from __future__ import annotations
+
 import pyspark
 from pyspark.sql import SparkSession
 

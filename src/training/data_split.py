@@ -21,6 +21,8 @@ TrainValidationSplit on the training portion") while additionally splitting that
 genuine, only-used-once validation slice exists for cross-model comparison.
 """
 
+from __future__ import annotations
+
 from pyspark.sql import DataFrame
 
 from config import settings

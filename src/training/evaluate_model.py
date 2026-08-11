@@ -10,6 +10,8 @@ Produces `models/model_comparison.csv`, `models/model_metadata.json`,
 notebook prototype's ad hoc `output/` folders, §23 Known Issue #5).
 """
 
+from __future__ import annotations
+
 import csv
 import json
 import os

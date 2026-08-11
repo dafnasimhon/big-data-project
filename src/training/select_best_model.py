@@ -8,6 +8,8 @@ Floating-point metrics essentially never match exactly, so "ties" are decided wi
 small relative tolerance rather than requiring bit-for-bit equality.
 """
 
+from __future__ import annotations
+
 from src.training.tune_models import TuningResult
 
 RELATIVE_TIE_TOLERANCE = 1e-6

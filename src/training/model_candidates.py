@@ -13,6 +13,8 @@ candidates, which is already substantial with the OneHotEncoder/CountVectorizer 
 refit each time.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from pyspark.ml.regression import (
