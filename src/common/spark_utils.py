@@ -4,6 +4,23 @@ from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
 _NUMERIC_PATTERN = r"^-?\d+(\.\d+)?$"
+_MISSING_TEXT_VALUES = {"", "NA"}
+
+
+def is_missing_text(column: Column) -> Column:
+    """True for null, blank/whitespace-only, or this dataset's literal "NA" placeholder.
+
+    The Stack Overflow survey CSV encodes missing values as the literal 2-character
+    string "NA" (confirmed by inspection — Spark's CSV reader has no built-in null-value
+    marker for it, `nullValue` defaults to "", not "NA"), not as SQL null or blank string.
+    Checking only `isNull()`/blank-string missed this entirely — confirmed on the real VM
+    run (2026-08-11): the exploration report claimed 0 missing target values out of
+    89,184 rows, when the actual figure (via `safe_cast_double` on the target, which
+    happens to reject "NA" as non-numeric) is 41,165 missing. Any column-level
+    missing-value check must go through this helper, not a bare null/blank check.
+    """
+    text_column = F.trim(column.cast("string"))
+    return column.isNull() | text_column.isin(_MISSING_TEXT_VALUES)
 
 
 def safe_cast_double(column: Column) -> Column:

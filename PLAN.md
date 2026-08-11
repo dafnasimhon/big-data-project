@@ -720,18 +720,41 @@ before treating any of it as final.
     model_candidates}.py` — this defers annotation evaluation so the exact Python
     version stops mattering. Confirms Known Issue #9 wasn't just caution: running
     on the real target environment immediately surfaced a bug local testing couldn't.
-11. **Full run against the real dataset is blocked on this Windows dev machine, not by
-    code.** `data/raw/survey_results_public.csv` was extracted from `data.zip` here
-    (2026-08-11) and `src/exploration/explore_dataset.py` was attempted against the real
-    89,184-row file — it failed with `HADOOP_HOME and hadoop.home.dir are unset`.
-    Any Spark operation that *writes files* (the exploration CSV report, and
-    `PipelineModel.save()` in `evaluate_model.py`) needs Hadoop's `winutils.exe` on
-    Windows; it isn't installed here. This doesn't affect the target Linux VM at all (no
-    winutils needed there) and isn't a code defect — but it means **no part of Phases
-    2–5 has actually been run against the real dataset yet**, only against small
-    synthetic/in-memory samples in tests. This is the next real validation step, to be
-    done on the VM (or after installing `winutils.exe` locally, if that's ever wanted for
-    faster local iteration).
+11. ~~Full run against the real dataset blocked on this Windows dev machine~~
+    **Superseded (2026-08-11).** Confirmed unrelated to the target VM — the user ran
+    `explore_dataset.build_report()` directly on the actual VM (`~/project`, real Spark
+    install) against the full 89,184-row file, in a Jupyter notebook (`get_spark_session`
+    + `build_report` called directly rather than via `main()`, so the JSON file write
+    didn't happen, but the in-memory report did — no winutils-equivalent issue hit on
+    Linux, as expected). This produced the report seen in #12 below, which is what
+    surfaced that bug. Local Windows runs remain blocked on `winutils.exe` for anything
+    that writes files, but that's no longer the only way to validate against real data.
+12. **Found and fixed running on the real VM (2026-08-11) — the important one.** The
+    exploration report claimed `rows_with_target_present: 89184,
+    rows_with_target_missing: 0` — i.e. 100% of rows have a usable salary, which
+    contradicts the already-established fact that only 48,019/89,184 (53.8%) do (§2). Root
+    cause: **this dataset encodes missing values as the literal text string `"NA"`**, not
+    SQL null or a blank string (Spark's CSV reader's `nullValue` option defaults to `""`,
+    not `"NA"`, so it's read as ordinary text). Every missing-value check in the codebase
+    that only tested `isNull()`/blank-string — `explore_dataset.py`'s
+    `missing_value_summary()` and `salary_present` check, and, more seriously,
+    `data_cleaning.py` step 2's blank-to-null pass — missed it entirely. For
+    `data_cleaning.py` specifically, this meant step 6's `fillna("Unknown", ...)` never
+    actually caught `"NA"` values in categorical/skill columns (`fillna` only touches true
+    nulls), so `"NA"` was sitting in the training data as its own bogus category instead
+    of being merged into `"Unknown"` as §10.6 requires. (The target column itself was
+    *not* affected — `safe_cast_double`'s regex validation already rejected `"NA"` as
+    non-numeric, which is why the 48,019-row cleaned dataset figure was always correct.)
+    Fixed with a new shared helper, `src/common/spark_utils.py: is_missing_text()`, used
+    by both `data_cleaning.py` step 2 and `explore_dataset.py`'s missing-value checks.
+    New regression tests added: `tests/test_spark_utils.py`, `tests/test_explore_dataset.py`,
+    and `tests/test_cleaning.py::test_clean_dataset_fills_na_string_categoricals_with_unknown`
+    — the existing categorical-fill test used Python `None` instead of the real `"NA"`
+    sentinel, which is exactly why it didn't catch this. 30/30 tests passing locally
+    after the fix. **Not yet re-run against the real dataset** — needs a `git pull` +
+    re-run on the VM to confirm the corrected report and re-check whether this changes
+    anything downstream (it shouldn't, since the target-column path was already correct,
+    but the categorical `"NA"`→`"Unknown"` fix is new behavior worth seeing on real data).
 
 ## 24. Step-by-Step Execution Checklist
 

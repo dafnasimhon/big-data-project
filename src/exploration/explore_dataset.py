@@ -20,7 +20,7 @@ from config import settings
 from src.common.feature_config import CANDIDATE_INPUT_FEATURES, TARGET_COLUMN
 from src.common.logging_config import get_logger
 from src.common.spark_session import get_spark_session
-from src.common.spark_utils import safe_cast_double
+from src.common.spark_utils import is_missing_text, safe_cast_double
 from src.training.data_loader import load_raw_dataset
 
 logger = get_logger(__name__)
@@ -48,9 +48,7 @@ def missing_value_summary(df: DataFrame, columns: list) -> DataFrame:
     total = df.count()
     rows = []
     for column in columns:
-        missing = df.filter(
-            F.col(column).isNull() | (F.trim(F.col(column).cast("string")) == "")
-        ).count()
+        missing = df.filter(is_missing_text(F.col(column))).count()
         percentage = round(missing / total * 100, 2) if total else 0.0
         rows.append((column, missing, percentage))
     return df.sparkSession.createDataFrame(rows, ["column", "missing_count", "missing_percentage"])
@@ -99,9 +97,7 @@ def build_report(spark: SparkSession) -> dict:
         os.path.join(REPORT_DIR, "missing_values_summary")
     )
 
-    salary_present = df.filter(
-        F.col(TARGET_COLUMN).isNotNull() & (F.trim(F.col(TARGET_COLUMN).cast("string")) != "")
-    ).count()
+    salary_present = df.filter(~is_missing_text(F.col(TARGET_COLUMN))).count()
 
     report = {
         "row_count": row_count,

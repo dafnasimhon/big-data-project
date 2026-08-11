@@ -76,7 +76,7 @@ def test_clean_dataset_drops_missing_and_nonpositive_target(spark):
     assert result["log_label"] == pytest.approx(11.5129, rel=1e-3)
 
 
-def test_clean_dataset_fills_missing_categoricals_with_unknown(spark):
+def test_clean_dataset_fills_null_categoricals_with_unknown(spark):
     rows = [
         (
             None, "25-34 years old", None, "Employed, full-time", "Remote", "5",
@@ -93,6 +93,30 @@ def test_clean_dataset_fills_missing_categoricals_with_unknown(spark):
     assert result["EdLevel"] == "Unknown"
     assert result["Industry"] == "Unknown"
     assert result["LanguageHaveWorkedWith"] == "Unknown"
+
+
+def test_clean_dataset_fills_na_string_categoricals_with_unknown(spark):
+    # The real dataset encodes missing values as the literal string "NA", not SQL null or
+    # a blank string — this is the case that actually matters (see spark_utils.py:
+    # is_missing_text and data_cleaning.py's module docstring for how this was found).
+    rows = [
+        (
+            "NA", "25-34 years old", "NA", "Employed, full-time", "Remote", "5",
+            "Developer", "20 to 99 employees", "NA", "NA", "NA", "NA",
+            "100000",
+        ),
+    ]
+    df = spark.createDataFrame(rows, schema=RAW_SCHEMA)
+
+    cleaned = clean_dataset(df)
+    result = cleaned.first()
+
+    assert result["Country"] == "Unknown"
+    assert result["EdLevel"] == "Unknown"
+    assert result["Industry"] == "Unknown"
+    assert result["LanguageHaveWorkedWith"] == "Unknown"
+    assert result["DatabaseHaveWorkedWith"] == "Unknown"
+    assert result["PlatformHaveWorkedWith"] == "Unknown"
 
 
 def test_clean_dataset_deduplicates_rows(spark):

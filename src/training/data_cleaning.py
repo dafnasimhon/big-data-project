@@ -24,6 +24,13 @@ documented in PLAN.md §23 "Known issues":
     VM's Spark 3.3.0 happens to have ANSI off by default, which is the only reason the
     notebook prototype's bare `.cast("double")` didn't crash there — this version doesn't
     depend on that setting either way.
+  - Step 2's blank-to-null pass also nullifies the literal text `"NA"`, not just empty
+    strings. Found running against the real dataset on the VM (2026-08-11): this CSV
+    encodes missing values as the literal string `"NA"` (confirmed by inspection — Spark's
+    CSV reader's `nullValue` option defaults to `""`, not `"NA"`), so a blank-string-only
+    check left `"NA"` sitting in every categorical/skill column, meaning step 6's
+    `fillna("Unknown", ...)` never actually caught it (`fillna` only touches true nulls).
+    See `src/common/spark_utils.py: is_missing_text()`.
 """
 
 from pyspark.sql import DataFrame
@@ -36,7 +43,7 @@ from src.common.feature_config import (
     TARGET_COLUMN,
 )
 from src.common.logging_config import get_logger
-from src.common.spark_utils import safe_cast_double
+from src.common.spark_utils import is_missing_text, safe_cast_double
 
 logger = get_logger(__name__)
 
@@ -76,14 +83,14 @@ def clean_dataset(raw_df: DataFrame) -> DataFrame:
     df = raw_df.select(*CANDIDATE_INPUT_FEATURES, TARGET_COLUMN)
     df = _log_row_count(df, "selecting required columns (step 1)")
 
-    # Step 2: blank strings -> null, drop duplicate rows.
+    # Step 2: blank strings / this dataset's "NA" placeholder -> null, drop duplicates.
     for column in df.columns:
         df = df.withColumn(
             column,
-            F.when(F.trim(F.col(column).cast("string")) == "", None).otherwise(F.col(column)),
+            F.when(is_missing_text(F.col(column)), None).otherwise(F.col(column)),
         )
     df = df.dropDuplicates()
-    df = _log_row_count(df, "blank-to-null + de-duplication (step 2)")
+    df = _log_row_count(df, "blank/NA-to-null + de-duplication (step 2)")
 
     # Step 3/4: cast target to numeric, remove rows with missing target.
     df = df.withColumn(
