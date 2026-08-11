@@ -751,10 +751,15 @@ before treating any of it as final.
     and `tests/test_cleaning.py::test_clean_dataset_fills_na_string_categoricals_with_unknown`
     — the existing categorical-fill test used Python `None` instead of the real `"NA"`
     sentinel, which is exactly why it didn't catch this. 30/30 tests passing locally
-    after the fix. **Not yet re-run against the real dataset** — needs a `git pull` +
-    re-run on the VM to confirm the corrected report and re-check whether this changes
-    anything downstream (it shouldn't, since the target-column path was already correct,
-    but the categorical `"NA"`→`"Unknown"` fix is new behavior worth seeing on real data).
+    after the fix. **Confirmed fixed on the VM (2026-08-11):** re-run against the real
+    89,184-row file now reports `rows_with_target_present: 48019,
+    rows_with_target_missing: 41165` — exactly matching the known 53.8% figure from §2.
+    A related follow-up was found in the same report: `top_values()` (used for
+    top languages/databases/platforms) was also counting `"NA"` as if it were a real
+    choice — it ranked 2nd in `top_platforms` and 6th in `top_databases` on the real data.
+    Fixed the same way (reusing `is_missing_text()`), verified with a new test
+    (`test_top_values_excludes_na_sentinel`), not yet re-confirmed against real data (low
+    risk — same fix pattern, already proven correct once this session).
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -794,24 +799,24 @@ work through together. Checked items are done; unchecked items are next.
   met**; 1.8–1.10 need an actual VM session
 
 ### Phase 2 — Dataset exploration and target decision
-- [x] 2.1 Ported to `src/exploration/explore_dataset.py` (2026-08-11): a real,
-      importable Spark job (`python -m src.exploration.explore_dataset`) covering §9 —
-      schema, missing values, target-candidate-column check (stops with a `RuntimeError`
-      instead of proceeding silently if `ConvertedCompYearly` is missing), cardinality,
-      top languages/databases/platforms, and exact-quantile salary diagnostics. Its pure
-      functions are smoke-tested against a tiny in-memory DataFrame; the full job has
-      **not yet been run against the real 89,184-row CSV** since that file hasn't been
-      copied into `data/raw/` in this repo yet (blocked on 1.3)
-- [ ] 2.2 Run against the real dataset and confirm the report — pending 1.3 (CSV not yet
-      in `data/raw/` here). Writes to `data/processed/exploration_report.json` +
-      `data/processed/missing_values_summary/` once run (correct path per §7, unlike the
-      notebook prototype's `output/`)
+- [x] 2.1 `src/exploration/explore_dataset.py` covers §9 — schema, missing values,
+      target-candidate-column check (stops with a `RuntimeError` instead of proceeding
+      silently if `ConvertedCompYearly` is missing), cardinality, top
+      languages/databases/platforms, exact-quantile salary diagnostics
+- [x] 2.2 **Run against the real 89,184-row dataset on the actual VM (2026-08-11)** —
+      via `build_report()` called directly in a Jupyter notebook, not yet via `main()`
+      from a terminal, so the JSON/CSV file writes (`data/processed/`) haven't happened
+      on the VM yet, only the in-memory report has been confirmed. This run is what
+      surfaced and confirmed the fix for the `"NA"`-sentinel bug (§23 Known Issue #12):
+      `rows_with_target_present: 48019, rows_with_target_missing: 41165`, matching §2
+      exactly. Running `python -m src.exploration.explore_dataset` on the VM to produce
+      the actual report files is the one remaining piece of this item
 - [x] 2.3 Target-selection decision written back into this PLAN.md — see §2 "Final Target
-      Decision" above (`ConvertedCompYearly`, 48,019/89,184 usable rows, from the
-      notebook prototype's run against the real file)
-- **Completion check:** target report and data-quality report saved — met by the
-  notebook prototype's run; the ported script exists and is unit-tested but hasn't
-  produced its own report yet (needs 1.3 first)
+      Decision" above (`ConvertedCompYearly`, 48,019/89,184 usable rows) — now confirmed
+      twice: once via the notebook prototype, once via the ported script on the real VM
+- **Completion check:** target report and data-quality report saved — **substantively
+  met** (real numbers confirmed against the real dataset on the real VM); the on-disk
+  report files just haven't been written there yet (trivial — `main()` vs. `build_report()`)
 
 ### Phase 3 — Cleaning and reusable feature pipeline
 - [x] 3.1 `src/training/data_loader.py` — `load_raw_dataset(spark, path=None)`, reads
