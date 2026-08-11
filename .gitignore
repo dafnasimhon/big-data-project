@@ -1,0 +1,41 @@
+# Data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/samples/*
+!data/samples/.gitkeep
+data.zip
+
+# Models and outputs
+models/best_salary_model/
+models/model_metrics.json
+models/model_comparison.csv
+models/model_metadata.json
+
+# Checkpoints
+checkpoints/*
+!checkpoints/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Env
+.env
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,9 @@
+# pyspark version must match the Spark version already installed on the VM
+# (check with `spark-submit --version` and pin this accordingly).
+pyspark
+
+confluent-kafka
+python-dotenv
+streamlit
+pandas
+pytest
