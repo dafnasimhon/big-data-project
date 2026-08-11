@@ -4,14 +4,26 @@ For each of the 4 required candidates:
   1. Wrap `feature_pipeline` stages + the regressor in one `Pipeline` (indexers/encoders/
      imputer/vocab are fit fresh per candidate, inside the CV folds, so nothing leaks
      across models or out of `cv_train_df` — PLAN.md rule 7).
-  2. Run `CrossValidator` (§12: "CrossValidator or TrainValidationSplit on the training
-     portion") on `cv_train_df` only, tuning against log-space RMSE.
-  3. Evaluate the resulting best-per-model on `validation_df` — data CrossValidator never
+  2. Run k-fold cross-validation (§12: "CrossValidator or TrainValidationSplit on the
+     training portion") on `cv_train_df` only, tuning against log-space RMSE.
+  3. Evaluate the resulting best-per-model on `validation_df` — data the CV step never
      saw — reporting real-scale (post-`expm1`) RMSE/MAE/R², since §13 requires metrics in
      the original salary scale even though training targets `log_label`.
 
 `test_df` is never referenced here — it's reserved for `train_final_model.py`'s one-time
 final evaluation of the already-selected winner (§23 Known Issue #1 fix).
+
+**Why a hand-rolled k-fold loop instead of `pyspark.ml.tuning.CrossValidator`:** found
+running on the actual VM (2026-08-11) — `CrossValidator` fits each fold from a background
+thread (even at its default `parallelism=1`), and that thread needs its own fresh py4j
+socket connection back to the JVM gateway. In the Jupyter kernel environment this project
+was run in, that reconnection intermittently failed under load
+(`ConnectionRefusedError`, reproduced twice, including mid-`RandomForestRegressor`)
+while every same-thread Spark call worked reliably throughout. `cross_validate()` below
+does the identical fold-splitting/fit/evaluate/refit-on-all-data work as
+`CrossValidator`, entirely on the calling thread — since `parallelism=1` meant
+`CrossValidator` never actually ran folds concurrently anyway, this is not a performance
+regression, just a strictly more robust way to get the same result.
 """
 
 from __future__ import annotations
@@ -21,7 +33,6 @@ from dataclasses import dataclass, field
 
 from pyspark.ml import Pipeline
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.tuning import CrossValidator
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
@@ -32,6 +43,8 @@ from src.training.feature_pipeline import build_feature_stages
 from src.training.model_candidates import ModelCandidate, build_candidates
 
 logger = get_logger(__name__)
+
+NUM_FOLDS = 3
 
 
 @dataclass
@@ -72,23 +85,64 @@ def evaluate_real_scale(predictions: DataFrame) -> tuple[float, float, float]:
     return rmse, mae, r2
 
 
+def cross_validate(
+    stages_factory,
+    param_grid: list,
+    evaluator: RegressionEvaluator,
+    data: DataFrame,
+    num_folds: int = NUM_FOLDS,
+    seed: int = 42,
+):
+    """Hand-rolled equivalent of `pyspark.ml.tuning.CrossValidator` — see module
+    docstring for why. `stages_factory` is a zero-arg callable returning a fresh list of
+    Pipeline stages (feature stages + regressor) for each fit call.
+
+    Returns (best_model, best_params_map): `best_model` is fit on the *entire* `data`
+    using the best-found params (matching `CrossValidatorModel.bestModel`'s behavior).
+    """
+    fold_dfs = data.randomSplit([1.0] * num_folds, seed=seed)
+
+    avg_metrics = []
+    for params in param_grid:
+        fold_metrics = []
+        for held_out_index in range(num_folds):
+            train_fold = None
+            for fold_index, fold_df in enumerate(fold_dfs):
+                if fold_index == held_out_index:
+                    continue
+                train_fold = fold_df if train_fold is None else train_fold.unionByName(fold_df)
+
+            model = Pipeline(stages=stages_factory()).fit(train_fold, params)
+            metric = evaluator.evaluate(model.transform(fold_dfs[held_out_index]))
+            fold_metrics.append(metric)
+
+        avg_metrics.append(sum(fold_metrics) / len(fold_metrics))
+
+    if evaluator.isLargerBetter():
+        best_index = max(range(len(avg_metrics)), key=lambda i: avg_metrics[i])
+    else:
+        best_index = min(range(len(avg_metrics)), key=lambda i: avg_metrics[i])
+    best_params = param_grid[best_index]
+
+    best_model = Pipeline(stages=stages_factory()).fit(data, best_params)
+    return best_model, best_params
+
+
 def tune_candidate(candidate: ModelCandidate, cv_train_df: DataFrame, validation_df: DataFrame) -> TuningResult:
-    pipeline = Pipeline(stages=build_feature_stages() + [candidate.regressor])
-    cross_validator = CrossValidator(
-        estimator=pipeline,
-        estimatorParamMaps=candidate.param_grid,
-        evaluator=RegressionEvaluator(labelCol="log_label", predictionCol="log_prediction", metricName="rmse"),
-        numFolds=3,
-        seed=settings.RANDOM_SEED,
-    )
+    evaluator = RegressionEvaluator(labelCol="log_label", predictionCol="log_prediction", metricName="rmse")
+
+    def stages_factory():
+        return build_feature_stages() + [candidate.regressor]
 
     logger.info("Tuning %s over %d parameter combinations", candidate.name, len(candidate.param_grid))
     started_at = time.time()
-    cv_model = cross_validator.fit(cv_train_df)
+    best_model, _best_params_map = cross_validate(
+        stages_factory, candidate.param_grid, evaluator, cv_train_df, seed=settings.RANDOM_SEED
+    )
     training_time_seconds = time.time() - started_at
 
-    best_params = extract_best_params(cv_model.bestModel, candidate.param_grid)
-    predictions = cv_model.bestModel.transform(validation_df)
+    best_params = extract_best_params(best_model, candidate.param_grid)
+    predictions = best_model.transform(validation_df)
     rmse, mae, r2 = evaluate_real_scale(predictions)
 
     logger.info(
@@ -103,7 +157,7 @@ def tune_candidate(candidate: ModelCandidate, cv_train_df: DataFrame, validation
         validation_mae=mae,
         validation_r2=r2,
         training_time_seconds=training_time_seconds,
-        pipeline_model=cv_model.bestModel,
+        pipeline_model=best_model,
     )
 
 
