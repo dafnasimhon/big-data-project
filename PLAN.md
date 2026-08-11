@@ -273,17 +273,19 @@ salary-prediction-big-data/
 
 > **Current actual layout (2026-08-11).** The skeleton exists (`data/{raw,samples,
 > processed}/`, `models/`, `checkpoints/`, `config/settings.py`, `scripts/`, `tests/` —
-> see Phase 1 in §24), and Phases 2–3 have real, tested code in it:
+> see Phase 1 in §24), and Phases 2–5 have real, tested code in it:
 > `src/common/{logging_config,spark_session,schemas,feature_config,spark_utils}.py`,
 > `src/exploration/explore_dataset.py`, `src/training/{data_loader,data_cleaning,
-> feature_pipeline}.py`, plus `tests/{test_cleaning,test_features,test_schema}.py`
-> (12/12 passing locally). `src/{producers,streaming,dashboard}/` are still empty
-> packages — Phase 4/5 (tuned training + selection) and Phase 7 (streaming) logic still
-> only exists as the notebook prototype in the separate `big_data_project/` folder
-> (`notebooks/`, `data/`) described in §23, not yet ported in. The raw CSV itself also
-> hasn't been copied into this repo's `data/raw/` yet (§24 Phase 1.3), so the ported
-> exploration/cleaning code hasn't been run end-to-end against the real 89,184-row file
-> here — only against small in-memory samples in tests.
+> feature_pipeline,data_split,model_candidates,tune_models,select_best_model,
+> train_final_model,evaluate_model}.py`, plus 24 passing pytest tests across
+> `tests/test_{cleaning,features,schema,model_candidates,select_best_model,
+> training_pipeline}.py`. `src/{producers,streaming,dashboard}/` are still empty
+> packages — Phase 7 (streaming) logic still only exists as the notebook prototype in the
+> separate `big_data_project/` folder (`notebooks/`, `data/`) described in §23, not yet
+> ported in. The raw CSV itself also hasn't been copied into this repo's `data/raw/` yet
+> (§24 Phase 1.3), so none of the ported exploration/cleaning/training code has been run
+> end-to-end against the real 89,184-row file here — only against small in-memory/
+> synthetic samples in tests.
 
 ## 8. Kafka Topics and Message Contracts
 
@@ -649,38 +651,44 @@ before treating any of it as final.
   validation of required fields.
 
 **Known issues to fix before this is "final" (not optional polish):**
-1. **Test-set leakage across notebooks.** 03, 03B, and 03C all reuse the *same* seed-42
-   80/20 split, so the "test" set was used to (a) pick Random Forest as the winner, (b)
-   decide the log1p + skill-count version was an improvement, and (c) report final KPIs —
-   three decisions on data that's no longer an unbiased test set. Needs a real 3-way
-   split: train/validation for all comparison and improvement decisions, one test set
-   touched exactly once at the very end, per §12's data-splitting strategy. **Still open**
-   — this is Phase 4/5 work, not touched by the Phase 2/3 porting done on 2026-08-11.
-2. **No real hyperparameter tuning.** Each model uses one hardcoded parameter set; §12
-   requires `CrossValidator`/`TrainValidationSplit` over the listed param grids. **Still
-   open** — Phase 4 work.
+1. ~~Test-set leakage across notebooks~~ **Resolved (2026-08-11).**
+   `src/training/data_split.py` now carves the cleaned dataset into three disjoint
+   slices: `cv_train` (60%, all `CrossValidator` ever sees), `validation` (20%, used
+   exactly once per candidate model to compute the real-scale metrics
+   `select_best_model.py` compares), and `test` (20%, referenced only inside
+   `train_final_model.py`, exactly once, after the winner is already chosen). See §24
+   Phase 4/5.
+2. ~~No real hyperparameter tuning~~ **Resolved (2026-08-11).**
+   `src/training/model_candidates.py` + `tune_models.py` now run a real
+   `CrossValidator` (3 folds) per model over a `ParamGridBuilder` grid for each of the 4
+   required models, tuned against log-space RMSE. Grids are deliberately small (~4
+   combinations each) — documented in `model_candidates.py` as appropriate for a
+   dev machine; widen them for the full run on the VM.
 3. ~~Multi-value skill features simplified to counts~~ **Resolved (2026-08-11).**
    `src/training/feature_pipeline.py` now implements §11 as written: `RegexTokenizer` +
    `CountVectorizer(binary=True)` per skill column, building top-N (`TOP_LANGUAGES`/
    `TOP_DATABASES`/`TOP_PLATFORMS`) binary indicators fit only on the training fold —
    see §24 Phase 3.
-4. **Model quality is weak** — R² of 0.012 is barely above a flat baseline. Still an open
-   question once real training happens against the ported pipeline; worth revisiting
-   `Country`/`DevType` one-hot cardinality and whether per-skill indicators (now
-   available, see #3) help more than the raw counts did.
-5. **Output artifacts don't match §12's required paths/schema.** Still open — applies once
-   Phase 4/5 training modules are ported; the exploration report now correctly writes to
-   `data/processed/` (see §24 Phase 2), but `models/model_comparison.csv` /
-   `model_metadata.json` / `model_metrics.json` don't exist yet.
-6. ~~Not yet ported to `src/`~~ **Partially resolved (2026-08-11).** Phase 2 exploration
-   and Phase 3 cleaning/feature-pipeline logic now live in `src/exploration/` and
-   `src/training/`, config-driven via `config/settings.py`, with 12 passing pytest tests
-   (`tests/test_cleaning.py`, `tests/test_features.py`, `tests/test_schema.py`) run
-   locally against real PySpark (4.2.0 — not yet re-verified against the VM's pinned
-   Spark 3.3.0; the APIs used are stable across that range, but treat as unverified on
-   the actual target version until run there). Phase 4/5 training/selection and Phase 7
-   streaming logic are **not yet ported**.
-7. **New: found and fixed during porting.** The prototype's bare `.cast("double")` on
+4. **Model quality is weak** — R² of 0.012 (notebook prototype) is barely above a flat
+   baseline. **Still open** — the ported Phase 4/5 code (§24) hasn't been run against the
+   real 89,184-row dataset yet (blocked on 1.3, the CSV isn't in `data/raw/` in this repo),
+   so there's no real-scale number for the ported pipeline yet. Worth revisiting
+   `Country`/`DevType` one-hot cardinality and whether the now-available per-skill
+   indicators (#3) help more than the notebook's raw counts did, once it runs for real.
+5. ~~Output artifacts don't match §12's required paths/schema~~ **Resolved (2026-08-11).**
+   `src/training/evaluate_model.py` writes `models/model_comparison.csv`,
+   `models/model_metadata.json`, `models/model_metrics.json` in exactly the documented
+   schema (verified with a dummy-data smoke test, see §24 Phase 5), and saves the winning
+   `PipelineModel` to `models/best_salary_model/`. Not yet exercised against real data
+   (same blocker as #4).
+6. ~~Not yet ported to `src/`~~ **Further resolved (2026-08-11).** Phase 4/5
+   (training/tuning/selection) now also lives in `src/training/`:
+   `data_split.py`, `model_candidates.py`, `tune_models.py`, `select_best_model.py`,
+   `train_final_model.py`, `evaluate_model.py`, with 24/24 pytest tests passing locally
+   (added `test_model_candidates.py`, `test_select_best_model.py`,
+   `test_training_pipeline.py` this round). Phase 7 streaming logic is still **not
+   ported** — that remains open.
+7. **Found and fixed during porting (2026-08-11).** The prototype's bare `.cast("double")` on
    non-numeric strings (e.g. `"NA"`) relies on Spark's ANSI SQL mode being off (the VM's
    Spark 3.3.0 default) to silently return null — under ANSI mode (the default in newer
    Spark) the same cast *raises an exception* instead. `src/common/spark_utils.py:
@@ -688,6 +696,18 @@ before treating any of it as final.
    either way; `data_cleaning.py` and `explore_dataset.py` both use it now. This was
    only caught because the ported code was actually tested against real PySpark rather
    than assumed correct from the notebook's observed behavior.
+8. **Found and fixed during porting (2026-08-11).** `pyspark.ml.param.Params.set()`
+   mutates the object in place and returns `None`, not `self` — `train_final_model.py`'s
+   first draft did `regressor = regressor.set(...)` in a loop over `best_params`, which
+   set `regressor` to `None` after the first parameter and crashed on the second. Fixed
+   by calling `.set(...)` without reassigning. Also only caught by actually running the
+   test suite against real PySpark, not by code review alone.
+9. **Unverified on the VM's exact Spark version.** Everything in §24 Phases 2–5 has been
+   tested locally against PySpark 4.2.0, not the VM's pinned Spark 3.3.0. The APIs used
+   (`CrossValidator`, `ParamGridBuilder`, `CountVectorizer`, `RegexTokenizer`, `Imputer`)
+   are stable across that range, but two real bugs (#7, #8) were only found by actually
+   running code, not by inspection — treat this as a real risk, not a formality, until
+   it's run there.
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -774,36 +794,46 @@ work through together. Checked items are done; unchecked items are next.
   (not yet re-run against the VM's exact Spark 3.3.0)
 
 ### Phase 4 — Train and tune candidate models
-- [x] 4.1 All 4 required models (LinearRegression, DecisionTreeRegressor,
-      RandomForestRegressor, GBTRegressor) implemented and trained in
-      `notebooks/03_Model_Training.ipynb` — **not yet extracted** to
-      `src/training/model_candidates.py`, and each uses one hardcoded parameter set
-      rather than the §12 parameter grids
-- [ ] 4.2 **Not done.** 80/20 split (seed 42) exists, but no `CrossValidator`/
-      `TrainValidationSplit` tuning was run — this is a real gap, not just a missing file;
-      see "Known issues" #2 in §23
-- [x] 4.3 Comparison table produced (`output/model_comparison`, CSV) — needs to move to
-      `models/model_comparison.csv` per §12 once ported
-- **Completion check:** comparison table produced — met for a single-parameter-set
-  comparison; true tuning (4.2) still outstanding
+- [x] 4.1 `src/training/model_candidates.py` (2026-08-11) — all 4 required models
+      (LinearRegression, DecisionTreeRegressor, RandomForestRegressor, GBTRegressor),
+      each with a real `ParamGridBuilder` grid (~4 combinations, deliberately small —
+      "sized for the available machine" per §12; widen on the VM)
+- [x] 4.2 `src/training/data_split.py` + `tune_models.py` (2026-08-11) — real
+      `CrossValidator(numFolds=3)` per model, fit only on the `cv_train` slice (60% of the
+      cleaned dataset; see `data_split.py`), tuned against log-space RMSE. This is the
+      fix for Known Issues #1 and #2 in §23
+- [x] 4.3 `tune_models.tune_all_candidates()` produces the comparison data (real-scale
+      RMSE/MAE/R² per model, evaluated on the `validation` slice — data CrossValidator
+      never saw) plus `evaluate_mean_baseline()` for the §13 naive baseline;
+      `evaluate_model.write_model_comparison()` writes it to the exact
+      `models/model_comparison.csv` path/schema §12 specifies
+- **Completion check:** comparison table produced — **met**, with real tuning. Code is
+  unit-tested (`tests/test_model_candidates.py`, `tests/test_training_pipeline.py`) but
+  **not yet run against the real 89,184-row dataset** (blocked on 1.3)
 
 ### Phase 5 — Select winner and final test evaluation
-- [x] 5.1 Selection-by-lowest-RMSE logic implemented inline in
-      `notebooks/03_Model_Training.ipynb` (picked Random Forest) — MAE/R² tie-break
-      branches not exercised (no ties occurred); not yet extracted to
-      `src/training/select_best_model.py`
-- [ ] 5.2 Refit + log1p reversal done in `03B_Model_Improvement.ipynb`, **but the "evaluate
-      once on the untouched test set" requirement was violated** — the same test split
-      was reused across 03/03B/03C for multiple decisions (Known issues #1 in §23). Needs
-      a real held-out test set touched exactly once, plus porting to
-      `src/training/train_final_model.py`
-- [x] 5.3 `models/best_salary_model/` saved and verified reloadable; metrics/comparison
-      exist as CSVs under `output/` — **not yet** `models/model_metadata.json` /
-      `models/model_metrics.json` in the exact §12 schema (target column, transformation,
-      feature version, etc.). Still needs `src/training/evaluate_model.py`
+- [x] 5.1 `src/training/select_best_model.py` (2026-08-11) — RMSE → MAE → R² tie-break
+      rule from §12, with a relative-tolerance tie check (floats essentially never match
+      exactly). Unit-tested directly, including both tie-break branches
+      (`tests/test_select_best_model.py`)
+- [x] 5.2 `src/training/train_final_model.py` (2026-08-11) — refits the selected model
+      type + hyperparameters on `cv_train + validation` combined, evaluates **exactly
+      once** on the untouched `test` slice, reverses `log1p` via `expm1` with negative/NaN
+      clipping (§13). This closes the "evaluate once on untouched test data" gap — Known
+      Issue #1 in §23 is now resolved
+- [x] 5.3 `src/training/evaluate_model.py` (2026-08-11) — writes
+      `models/model_metadata.json` and `models/model_metrics.json` in the exact §12
+      schema (selected model, selection metric, best params, validation + test metrics,
+      target column/transformation, feature version, timestamp) and saves the full
+      `PipelineModel` via `.write().overwrite().save(...)` to `models/best_salary_model/`.
+      Verified with a dummy-data smoke test producing well-formed CSV/JSON; not yet run
+      end-to-end against real data
 - [ ] 5.4 `scripts/train_and_select_model.sh` wiring Phases 3–5 together — not started
-- **Completion check:** best PipelineModel and metadata saved — model itself is saved and
-  reloadable; metadata format and the leakage-free test evaluation are still outstanding
+      (the Python entry point exists: `python -m src.training.evaluate_model`; the shell
+      wrapper around it for the VM is what's missing)
+- **Completion check:** best PipelineModel and metadata saved — **met** by the code path
+  (`evaluate_model.run_training_pipeline()`); not yet exercised against the real dataset,
+  and 5.4's shell wrapper is still outstanding
 
 ### Phase 6 — Kafka dataset producer
 - [ ] 6.1 `src/producers/dataset_producer.py` — reads CSV gradually, adds `event_id`/
