@@ -44,7 +44,7 @@ from src.training.model_candidates import ModelCandidate, build_candidates
 
 logger = get_logger(__name__)
 
-NUM_FOLDS = 3
+NUM_FOLDS = 2
 
 
 @dataclass

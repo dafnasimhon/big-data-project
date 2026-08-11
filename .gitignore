@@ -39,3 +39,6 @@ derby.log
 Thumbs.db
 .vscode/
 .idea/
+
+# Claude Code tooling state
+.claude/

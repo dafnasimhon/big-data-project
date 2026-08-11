@@ -5,11 +5,14 @@ Every regressor predicts `log_label` (see `data_cleaning.py`'s log1p decision) i
 `tune_models.py`/`train_final_model.py` via `expm1`, per §13's requirement to report
 metrics in the original scale.
 
-Grids are deliberately small (2 values per tuned hyperparameter, ~4 combinations per
-model) — "sized for the available machine" per §12. As written, cross-validation already
-means ~4 combos x 3 folds + 1 final refit = 13 pipeline fits per model, 52 total across
-all 4 candidates, which is already substantial with the OneHotEncoder/CountVectorizer
-stages refit each time.
+Grids are deliberately small — "sized for the available machine" per §12. Each model
+tunes exactly ONE hyperparameter over 2 values (others fixed at a reasonable default via
+the constructor), cut down from 2 tuned hyperparameters/~4 combinations (2026-08-11,
+after the VM run was taking too long even after the OOM fix below) — with `NUM_FOLDS=2`
+(see `tune_models.py`), that's 2 combos x 2 folds + 1 final refit = 5 pipeline fits per
+model, 20 total across all 4 candidates, down from 52. Still genuine cross-validated
+tuning per §12, just over a narrower search space; widen both the grids and `NUM_FOLDS`
+back up once a full run comfortably completes.
 
 `RandomForestRegressor`'s and `GBTRegressor`'s ceilings (`numTrees`/`maxIter`, `maxDepth`)
 were lowered from an initial [20, 50]/[5, 10] after a real `OutOfMemoryError: Java heap
@@ -51,45 +54,46 @@ def build_candidates() -> list[ModelCandidate]:
     seed = settings.RANDOM_SEED
 
     linear_regression = LinearRegression(
-        featuresCol="features", labelCol="log_label", predictionCol="log_prediction"
+        featuresCol="features",
+        labelCol="log_label",
+        predictionCol="log_prediction",
+        maxIter=100,
+        elasticNetParam=0.0,
     )
     linear_regression_grid = (
-        ParamGridBuilder()
-        .addGrid(linear_regression.regParam, [0.01, 0.1])
-        .addGrid(linear_regression.elasticNetParam, [0.0])
-        .addGrid(linear_regression.maxIter, [50, 100])
-        .build()
+        ParamGridBuilder().addGrid(linear_regression.regParam, [0.01, 0.1]).build()
     )
 
     decision_tree = DecisionTreeRegressor(
-        featuresCol="features", labelCol="log_label", predictionCol="log_prediction", seed=seed
+        featuresCol="features",
+        labelCol="log_label",
+        predictionCol="log_prediction",
+        seed=seed,
+        minInstancesPerNode=10,
     )
     decision_tree_grid = (
-        ParamGridBuilder()
-        .addGrid(decision_tree.maxDepth, [5, 10])
-        .addGrid(decision_tree.minInstancesPerNode, [1, 10])
-        .build()
+        ParamGridBuilder().addGrid(decision_tree.maxDepth, [5, 10]).build()
     )
 
     random_forest = RandomForestRegressor(
-        featuresCol="features", labelCol="log_label", predictionCol="log_prediction", seed=seed
+        featuresCol="features",
+        labelCol="log_label",
+        predictionCol="log_prediction",
+        seed=seed,
+        maxDepth=6,
     )
     random_forest_grid = (
-        ParamGridBuilder()
-        .addGrid(random_forest.numTrees, [10, 20])
-        .addGrid(random_forest.maxDepth, [5, 8])
-        .build()
+        ParamGridBuilder().addGrid(random_forest.numTrees, [10, 20]).build()
     )
 
     gbt = GBTRegressor(
-        featuresCol="features", labelCol="log_label", predictionCol="log_prediction", seed=seed
+        featuresCol="features",
+        labelCol="log_label",
+        predictionCol="log_prediction",
+        seed=seed,
+        maxDepth=4,
     )
-    gbt_grid = (
-        ParamGridBuilder()
-        .addGrid(gbt.maxIter, [10, 20])
-        .addGrid(gbt.maxDepth, [3, 5])
-        .build()
-    )
+    gbt_grid = ParamGridBuilder().addGrid(gbt.maxIter, [10, 20]).build()
 
     return [
         ModelCandidate("LinearRegression", linear_regression, linear_regression_grid),

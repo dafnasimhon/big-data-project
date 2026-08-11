@@ -56,6 +56,9 @@ RANDOM_SEED = _env_int("RANDOM_SEED", 42)
 TOP_LANGUAGES = _env_int("TOP_LANGUAGES", 20)
 TOP_DATABASES = _env_int("TOP_DATABASES", 15)
 TOP_PLATFORMS = _env_int("TOP_PLATFORMS", 15)
+# Employment is a multi-select field with ~9 real underlying statuses (see
+# feature_config.py) - 10 comfortably covers all of them without an arbitrary cap.
+TOP_EMPLOYMENT_STATUSES = _env_int("TOP_EMPLOYMENT_STATUSES", 10)
 
 # Producer / dashboard behavior
 DATASET_EVENT_DELAY_SECONDS = _env_int("DATASET_EVENT_DELAY_SECONDS", 2)

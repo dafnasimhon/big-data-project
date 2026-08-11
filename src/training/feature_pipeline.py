@@ -11,11 +11,16 @@ than re-deriving the vocabulary.
 Deviation from the notebook prototype (documented in PLAN.md §23 "Known issues" #3): the
 prototype used raw skill-list length (`LanguageCount` etc.) instead of per-skill
 indicators. This version implements §11 as written — `RegexTokenizer` splits each
-`;`-separated skill field, then `CountVectorizer(binary=True)` builds a top-N
-(`TOP_LANGUAGES`/`TOP_DATABASES`/`TOP_PLATFORMS`) binary indicator vector per field, fit
-from the training data only. Values outside the top-N are simply dropped (no explicit
-"other" bucket) — that part of §11 is optional and this keeps the pipeline to Spark ML's
-built-in transformers rather than a custom one.
+`;`-separated multi-value field, then `CountVectorizer(binary=True)` builds a top-N
+binary indicator vector per field, fit from the training data only. Values outside the
+top-N are simply dropped (no explicit "other" bucket) — that part of §11 is optional and
+this keeps the pipeline to Spark ML's built-in transformers rather than a custom one.
+
+`Employment` is handled the same way as the skill columns (`MULTI_VALUE_COLUMNS`), not
+via `StringIndexer`/`OneHotEncoder` — see `feature_config.py` for why (it's a multi-select
+field, not single-valued; treating each combination as its own category inflated it to
+~107 one-hot dimensions and was a real contributor to an `OutOfMemoryError` training
+`RandomForestRegressor` on the VM, 2026-08-11).
 """
 
 from pyspark.ml import Pipeline
@@ -29,9 +34,10 @@ from pyspark.ml.feature import (
 )
 
 from config import settings
-from src.common.feature_config import SINGLE_VALUE_CATEGORICAL_COLUMNS, SKILL_COLUMNS
+from src.common.feature_config import MULTI_VALUE_COLUMNS, SINGLE_VALUE_CATEGORICAL_COLUMNS
 
-SKILL_COLUMN_VOCAB_SIZES = {
+MULTI_VALUE_VOCAB_SIZES = {
+    "Employment": settings.TOP_EMPLOYMENT_STATUSES,
     "LanguageHaveWorkedWith": settings.TOP_LANGUAGES,
     "DatabaseHaveWorkedWith": settings.TOP_DATABASES,
     "PlatformHaveWorkedWith": settings.TOP_PLATFORMS,
@@ -63,8 +69,8 @@ def build_feature_stages() -> list:
         )
     )
 
-    skill_vector_columns = []
-    for column in SKILL_COLUMNS:
+    multi_value_vector_columns = []
+    for column in MULTI_VALUE_COLUMNS:
         token_column = f"{column}_tokens"
         vector_column = f"{column}_vec"
         stages.append(
@@ -74,15 +80,15 @@ def build_feature_stages() -> list:
             CountVectorizer(
                 inputCol=token_column,
                 outputCol=vector_column,
-                vocabSize=SKILL_COLUMN_VOCAB_SIZES[column],
+                vocabSize=MULTI_VALUE_VOCAB_SIZES[column],
                 binary=True,
             )
         )
-        skill_vector_columns.append(vector_column)
+        multi_value_vector_columns.append(vector_column)
 
     stages.append(
         VectorAssembler(
-            inputCols=encoded_columns + ["YearsCodeProNumeric_imputed"] + skill_vector_columns,
+            inputCols=encoded_columns + ["YearsCodeProNumeric_imputed"] + multi_value_vector_columns,
             outputCol="features",
             handleInvalid="keep",
         )

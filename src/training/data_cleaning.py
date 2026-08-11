@@ -31,6 +31,12 @@ documented in PLAN.md §23 "Known issues":
     check left `"NA"` sitting in every categorical/skill column, meaning step 6's
     `fillna("Unknown", ...)` never actually caught it (`fillna` only touches true nulls).
     See `src/common/spark_utils.py: is_missing_text()`.
+  - `Employment` moved from `SINGLE_VALUE_CATEGORICAL_COLUMNS` to `MULTI_VALUE_COLUMNS`
+    (2026-08-11) — it's actually a `;`-separated multi-select field, not single-valued;
+    see `src/common/feature_config.py` for why (found via a real OutOfMemoryError
+    training `RandomForestRegressor` on the VM). Step 6's "Unknown" fill-in and step 2's
+    missing-value handling both already treat it identically to the other multi-value
+    columns since it's just in the list now — no special-casing needed here.
 """
 
 from pyspark.sql import DataFrame
@@ -39,7 +45,7 @@ from pyspark.sql import functions as F
 from src.common.feature_config import (
     CANDIDATE_INPUT_FEATURES,
     SINGLE_VALUE_CATEGORICAL_COLUMNS,
-    SKILL_COLUMNS,
+    MULTI_VALUE_COLUMNS,
     TARGET_COLUMN,
 )
 from src.common.logging_config import get_logger
@@ -48,7 +54,7 @@ from src.common.spark_utils import is_missing_text, safe_cast_double
 logger = get_logger(__name__)
 
 FINAL_COLUMNS = (
-    SINGLE_VALUE_CATEGORICAL_COLUMNS + SKILL_COLUMNS + ["YearsCodeProNumeric", "label", "log_label"]
+    SINGLE_VALUE_CATEGORICAL_COLUMNS + MULTI_VALUE_COLUMNS + ["YearsCodeProNumeric", "label", "log_label"]
 )
 
 
@@ -112,9 +118,9 @@ def clean_dataset(raw_df: DataFrame) -> DataFrame:
     # Step 9: log1p transform of the target (decision documented above/in PLAN.md §23).
     df = df.withColumn("log_label", F.log1p(F.col("label")))
 
-    # Step 6: fill missing categorical/skill values with 'Unknown'.
-    df = df.fillna("Unknown", subset=SINGLE_VALUE_CATEGORICAL_COLUMNS + SKILL_COLUMNS)
-    df = _log_row_count(df, "filling missing categorical/skill values with 'Unknown' (step 6)")
+    # Step 6: fill missing categorical/multi-value values with 'Unknown'.
+    df = df.fillna("Unknown", subset=SINGLE_VALUE_CATEGORICAL_COLUMNS + MULTI_VALUE_COLUMNS)
+    df = _log_row_count(df, "filling missing categorical/multi-value fields with 'Unknown' (step 6)")
 
     df = df.select(*FINAL_COLUMNS)
     df = _log_row_count(df, "final cleaned dataset (step 10)")

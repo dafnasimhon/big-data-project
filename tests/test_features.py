@@ -1,7 +1,7 @@
 import pytest
 from pyspark.sql import SparkSession
 
-from src.training.feature_pipeline import build_feature_pipeline
+from src.training.feature_pipeline import build_feature_pipeline, build_feature_stages
 
 FEATURE_COLUMNS = [
     "Country",
@@ -67,6 +67,50 @@ def test_feature_pipeline_imputes_missing_years_code_pro(spark):
 
     imputed_values = [row["YearsCodeProNumeric_imputed"] for row in transformed.collect()]
     assert None not in imputed_values
+
+
+def test_employment_is_tokenized_not_one_hot_indexed(spark):
+    # Regression test for the fix found via a real OutOfMemoryError on the VM
+    # (2026-08-11): Employment is a multi-select field ("Employed, full-time;Student,
+    # part-time"), not single-valued — it must go through the same RegexTokenizer +
+    # CountVectorizer path as the skill columns, not StringIndexer + OneHotEncoder
+    # (which would explode it into ~107 one-hot dimensions for real data).
+    def _output_columns(stage):
+        try:
+            return list(stage.getOutputCols())
+        except Exception:
+            return [stage.getOutputCol()]
+
+    stage_output_columns = {
+        output_col for stage in build_feature_stages() for output_col in _output_columns(stage)
+    }
+
+    assert "Employment_tokens" in stage_output_columns
+    assert "Employment_vec" in stage_output_columns
+    assert "Employment_index" not in stage_output_columns
+    assert "Employment_encoded" not in stage_output_columns
+
+
+def test_feature_pipeline_splits_multi_select_employment(spark):
+    df = _sample_df(spark).union(
+        spark.createDataFrame(
+            [
+                (
+                    "USA", "25-34 years old", "Bachelor's",
+                    "Employed, full-time;Independent contractor, freelancer, or self-employed",
+                    "Remote", "Developer", "20 to 99 employees", "Tech", "Python", "PostgreSQL", "AWS",
+                    3.0, 95000.0, 11.4616,
+                )
+            ],
+            FEATURE_COLUMNS,
+        )
+    )
+    model = build_feature_pipeline().fit(df)
+    transformed = model.transform(df)
+
+    # Just confirming it fits/transforms without error and produces a real feature vector
+    # for the multi-status row — the point is this no longer needs a ~107-wide one-hot.
+    assert transformed.filter(transformed.features.isNull()).count() == 0
 
 
 def test_feature_pipeline_handles_unseen_categories_at_transform_time(spark):
