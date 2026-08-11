@@ -1,7 +1,7 @@
 import pytest
 from pyspark.sql import SparkSession
 
-from src.exploration.explore_dataset import check_target_candidates, missing_value_summary
+from src.exploration.explore_dataset import check_target_candidates, missing_value_summary, top_values
 
 TARGET_COLUMN = "ConvertedCompYearly"
 
@@ -22,6 +22,19 @@ def test_missing_value_summary_counts_na_string_as_missing(spark):
     )
     summary = {row["column"]: row["missing_count"] for row in missing_value_summary(df, ["Country"]).collect()}
     assert summary["Country"] == 2
+
+
+def test_top_values_excludes_na_sentinel(spark):
+    # Regression test: seen on the real VM run (2026-08-11) — "NA" was showing up ranked
+    # among real database/platform choices instead of being excluded as missing data.
+    df = spark.createDataFrame(
+        [("PostgreSQL;MySQL",), ("NA",), ("PostgreSQL",), ("NA",)], ["DatabaseHaveWorkedWith"]
+    )
+    result = top_values(df, "DatabaseHaveWorkedWith", top_n=5)
+    values = [value for value, _count in result]
+
+    assert "NA" not in values
+    assert ["PostgreSQL", 2] in result
 
 
 def test_check_target_candidates_finds_present_and_missing_columns(spark):

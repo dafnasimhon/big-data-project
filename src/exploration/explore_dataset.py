@@ -60,9 +60,9 @@ def cardinality_summary(df: DataFrame, columns: list) -> dict:
 
 def top_values(df: DataFrame, column: str, top_n: int, delimiter: str = ";") -> list:
     exploded = (
-        df.filter(F.col(column).isNotNull())
+        df.filter(~is_missing_text(F.col(column)))
         .select(F.explode(F.split(F.col(column), delimiter)).alias("value"))
-        .filter(F.col("value") != "")
+        .filter(~is_missing_text(F.col("value")))
     )
     return [
         [row["value"], row["count"]]
