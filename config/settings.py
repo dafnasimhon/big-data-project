@@ -29,6 +29,13 @@ KAFKA_ANALYTICS_TOPIC = _env("KAFKA_ANALYTICS_TOPIC", "salary_analytics")
 # Spark
 SPARK_MASTER_URL = _env("SPARK_MASTER_URL", "local[*]")
 SPARK_APP_NAME = _env("SPARK_APP_NAME", "TechSalaryPrediction")
+# Only takes effect when this process starts its own fresh JVM (e.g. spark-submit, a
+# plain `python -m ...` run, or a brand-new Jupyter kernel with no Spark session created
+# yet) - driver heap size is fixed at JVM startup and can't be changed on an
+# already-running session. Raised from Spark's small default after a real
+# OutOfMemoryError training RandomForestRegressor on the VM (2026-08-11, see
+# model_candidates.py).
+SPARK_DRIVER_MEMORY = _env("SPARK_DRIVER_MEMORY", "4g")
 
 # Paths (relative to the repo root unless overridden)
 DATASET_PATH = _env("DATASET_PATH", "./data/raw/survey_results_public.csv")

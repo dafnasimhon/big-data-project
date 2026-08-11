@@ -6,11 +6,21 @@ Every regressor predicts `log_label` (see `data_cleaning.py`'s log1p decision) i
 metrics in the original scale.
 
 Grids are deliberately small (2 values per tuned hyperparameter, ~4 combinations per
-model) — "sized for the available machine" per §12. Widen them when running the full
-89K-row dataset on the VM; as written, `CrossValidator(numFolds=3)` already means
-~4 combos x 3 folds + 1 final refit = 13 pipeline fits per model, 52 total across all 4
-candidates, which is already substantial with the OneHotEncoder/CountVectorizer stages
-refit each time.
+model) — "sized for the available machine" per §12. As written, cross-validation already
+means ~4 combos x 3 folds + 1 final refit = 13 pipeline fits per model, 52 total across
+all 4 candidates, which is already substantial with the OneHotEncoder/CountVectorizer
+stages refit each time.
+
+`RandomForestRegressor`'s and `GBTRegressor`'s ceilings (`numTrees`/`maxIter`, `maxDepth`)
+were lowered from an initial [20, 50]/[5, 10] after a real `OutOfMemoryError: Java heap
+space` on the VM (2026-08-11), inside `RandomForestRegressor`'s split-finding
+(`RandomForests.findBestSplits` -> `collectAsMap`) — tree ensembles hold per-(node,
+feature, bin) statistics in memory, and this project's one-hot-encoded categorical
+features (`Employment` alone has ~107 distinct values in the real data — it's actually a
+semicolon-separated multi-select field, not truly single-valued, which inflates its
+one-hot width considerably more than a normal category would; worth revisiting as its own
+fix later) plus the per-skill `CountVectorizer` columns add up to several hundred feature
+dimensions. Fewer/shallower trees reduces peak memory without giving up real tuning.
 """
 
 from __future__ import annotations
@@ -66,8 +76,8 @@ def build_candidates() -> list[ModelCandidate]:
     )
     random_forest_grid = (
         ParamGridBuilder()
-        .addGrid(random_forest.numTrees, [20, 50])
-        .addGrid(random_forest.maxDepth, [5, 10])
+        .addGrid(random_forest.numTrees, [10, 20])
+        .addGrid(random_forest.maxDepth, [5, 8])
         .build()
     )
 
@@ -76,7 +86,7 @@ def build_candidates() -> list[ModelCandidate]:
     )
     gbt_grid = (
         ParamGridBuilder()
-        .addGrid(gbt.maxIter, [20, 50])
+        .addGrid(gbt.maxIter, [10, 20])
         .addGrid(gbt.maxDepth, [3, 5])
         .build()
     )

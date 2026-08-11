@@ -22,6 +22,7 @@ def get_spark_session(app_name: str | None = None, with_kafka: bool = False) -> 
     builder = (
         SparkSession.builder.appName(app_name or settings.SPARK_APP_NAME)
         .master(settings.SPARK_MASTER_URL)
+        .config("spark.driver.memory", settings.SPARK_DRIVER_MEMORY)
     )
 
     if with_kafka:
