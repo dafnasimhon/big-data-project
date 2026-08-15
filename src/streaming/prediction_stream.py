@@ -37,8 +37,9 @@ import json
 import signal
 
 from pyspark.ml import PipelineModel
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.streaming import StreamingQuery
 
 from config import settings
 from src.common.feature_config import MULTI_VALUE_COLUMNS, SINGLE_VALUE_CATEGORICAL_COLUMNS
@@ -115,8 +116,13 @@ def to_kafka_rows(df: DataFrame, key_col: str | None) -> DataFrame:
     return df.select(key_expr.alias("key"), F.to_json(F.struct(*df.columns)).alias("value"))
 
 
-def run_prediction_stream() -> None:
-    spark = get_spark_session(app_name="SalaryPredictionStream", with_kafka=True)
+def build_streams(spark: SparkSession) -> tuple[StreamingQuery, StreamingQuery]:
+    """Builds and starts both streaming queries (predictions + dead letters) and
+    returns them immediately, without blocking. Shared by the blocking CLI entry point
+    (`run_prediction_stream`, below) and interactive/notebook use, where the caller
+    wants to start the streams, do other things (publish test requests, inspect
+    results), and explicitly `.stop()` them when done rather than block forever.
+    """
     metadata = load_model_metadata()
     model = PipelineModel.load(settings.MODEL_PATH)
 
@@ -160,9 +166,17 @@ def run_prediction_stream() -> None:
     )
 
     logger.info(
-        "Prediction stream running: %s -> %s (dead letters -> %s). Ctrl+C to stop.",
+        "Prediction stream running: %s -> %s (dead letters -> %s).",
         settings.KAFKA_REQUEST_TOPIC, settings.KAFKA_PREDICTION_TOPIC, settings.KAFKA_DEAD_LETTER_TOPIC,
     )
+    return prediction_query, dead_letter_query
+
+
+def run_prediction_stream() -> None:
+    """Blocking CLI entry point: `python -m src.streaming.prediction_stream`."""
+    spark = get_spark_session(app_name="SalaryPredictionStream", with_kafka=True)
+    prediction_query, dead_letter_query = build_streams(spark)
+    logger.info("Ctrl+C to stop.")
 
     def _graceful_shutdown(signum, frame):  # noqa: ARG001 - signal handler signature
         logger.info("Received shutdown signal, stopping streaming queries...")
