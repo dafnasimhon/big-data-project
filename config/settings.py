@@ -59,6 +59,13 @@ TOP_PLATFORMS = _env_int("TOP_PLATFORMS", 15)
 # Employment is a multi-select field with ~9 real underlying statuses (see
 # feature_config.py) - 10 comfortably covers all of them without an arbitrary cap.
 TOP_EMPLOYMENT_STATUSES = _env_int("TOP_EMPLOYMENT_STATUSES", 10)
+# §10.9 outlier decision (see data_cleaning.py docstring and PLAN.md §23): rows with a
+# target above this are dropped as implausible (almost certainly data-entry errors, not
+# real annual salaries - this dataset's max is $74,351,432) before log1p is applied to
+# the rest. $1M is a generous upper bound for a tech-industry survey's self-reported
+# annual salary (p99 in this dataset is ~$400K) - a domain-judgment call, not derived
+# from the data itself, so it's configurable rather than hardcoded.
+MAX_PLAUSIBLE_SALARY = _env_int("MAX_PLAUSIBLE_SALARY", 1_000_000)
 
 # Producer / dashboard behavior
 DATASET_EVENT_DELAY_SECONDS = _env_int("DATASET_EVENT_DELAY_SECONDS", 2)

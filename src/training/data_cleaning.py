@@ -8,10 +8,16 @@ documented in PLAN.md §23 "Known issues":
     version computes exact quantiles (`relativeError=0.0`, cheap at this row count) purely
     for diagnostics/logging.
   - §10.9 requires choosing EITHER controlled outlier filtering OR a log1p transform of
-    the target, and documenting the choice: this module chooses log1p (`log_label`),
-    matching what the prototype's own `03B_Model_Improvement.ipynb` empirically validated
-    as an improvement over both the untransformed target and a percentile cutoff. No rows
-    are dropped for being high earners; only missing/non-positive targets are removed.
+    the target, and documenting the choice. **Revised (2026-08-11) to use both together**,
+    after the first successful real-data training run (PLAN.md §23 #15) showed log1p
+    alone wasn't enough: every model's RMSE was dominated by this dataset's most extreme
+    values (max $74,351,432 — almost certainly a data-entry error, not a real annual
+    salary; p99 is only ~$400K). Rows with `label > MAX_PLAUSIBLE_SALARY` (default $1M,
+    `config/settings.py`) are now dropped as implausible before `log1p` is applied to the
+    rest — log1p still does real work compressing the *legitimate* right-skew among the
+    remaining rows, it just no longer has to contend with a handful of order-of-magnitude
+    data-entry errors at the same time. $1M is a generous, documented domain-judgment
+    call (not derived from the data), so it's configurable rather than hardcoded here.
   - `YearsCodeProNumeric` is intentionally left un-imputed here (nulls stay null). Median
     imputation happens inside the Spark ML `Imputer` stage in `feature_pipeline.py`, fit
     only on the training fold, so the imputed value never leaks information from
@@ -42,6 +48,7 @@ documented in PLAN.md §23 "Known issues":
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
+from config import settings
 from src.common.feature_config import (
     CANDIDATE_INPUT_FEATURES,
     SINGLE_VALUE_CATEGORICAL_COLUMNS,
@@ -112,10 +119,13 @@ def clean_dataset(raw_df: DataFrame) -> DataFrame:
     # Step 4/5: YearsCodePro -> numeric.
     df = convert_years_code_pro(df)
 
-    # Step 8: outlier investigation (diagnostic; see module docstring for step 9 decision).
+    # Step 8: outlier investigation (diagnostic, on the data about to be filtered below).
     log_outlier_diagnostics(df)
 
-    # Step 9: log1p transform of the target (decision documented above/in PLAN.md §23).
+    # Step 9: drop implausible extreme values, then log1p the rest (decision documented
+    # in the module docstring / PLAN.md §23).
+    df = df.filter(F.col("label") <= settings.MAX_PLAUSIBLE_SALARY)
+    df = _log_row_count(df, f"filtering label > {settings.MAX_PLAUSIBLE_SALARY} as implausible (step 9)")
     df = df.withColumn("log_label", F.log1p(F.col("label")))
 
     # Step 6: fill missing categorical/multi-value values with 'Unknown'.

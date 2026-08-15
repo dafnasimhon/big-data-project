@@ -2,6 +2,7 @@ import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StringType, StructField, StructType
 
+from config import settings
 from src.training.data_cleaning import clean_dataset, convert_years_code_pro
 
 RAW_COLUMNS = [
@@ -117,6 +118,27 @@ def test_clean_dataset_fills_na_string_categoricals_with_unknown(spark):
     assert result["LanguageHaveWorkedWith"] == "Unknown"
     assert result["DatabaseHaveWorkedWith"] == "Unknown"
     assert result["PlatformHaveWorkedWith"] == "Unknown"
+
+
+def test_clean_dataset_drops_implausibly_high_salaries(spark):
+    # Regression test for the §10.9 revision (2026-08-11): log1p alone let this dataset's
+    # extreme values (max $74,351,432) dominate RMSE in real training. Rows above
+    # MAX_PLAUSIBLE_SALARY must now be dropped outright, not just log-transformed.
+    base = (
+        "USA", "25-34 years old", "Bachelor's", "Employed, full-time", "Remote", "5",
+        "Developer", "20 to 99 employees", "Other", "Python;SQL", "PostgreSQL", "AWS",
+    )
+    rows = [
+        base + (str(settings.MAX_PLAUSIBLE_SALARY),),  # at the cap: kept
+        base + (str(settings.MAX_PLAUSIBLE_SALARY + 1),),  # just over: dropped
+        base + ("74351432",),  # this dataset's real max: dropped
+    ]
+    df = spark.createDataFrame(rows, schema=RAW_SCHEMA)
+
+    cleaned = clean_dataset(df)
+
+    assert cleaned.count() == 1
+    assert cleaned.first()["label"] == float(settings.MAX_PLAUSIBLE_SALARY)
 
 
 def test_clean_dataset_deduplicates_rows(spark):

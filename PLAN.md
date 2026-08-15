@@ -278,10 +278,12 @@ salary-prediction-big-data/
 > `src/common/{logging_config,spark_session,schemas,feature_config,spark_utils}.py`,
 > `src/exploration/explore_dataset.py`, `src/training/{data_loader,data_cleaning,
 > feature_pipeline,data_split,model_candidates,tune_models,select_best_model,
-> train_final_model,evaluate_model}.py`, plus 30 passing pytest tests. `models/` now has
-> real content from that run (`model_comparison.csv`, `model_metadata.json`,
-> `model_metrics.json`, `best_salary_model/`), though model quality itself is weak (R²≈0,
-> RMSE outlier-dominated) — see §23 #15, the agreed next step is real outlier handling.
+> train_final_model,evaluate_model}.py`, plus 31 passing pytest tests. `models/` has real
+> content from the first run (`model_comparison.csv`, `model_metadata.json`,
+> `model_metrics.json`, `best_salary_model/`), from before outlier filtering was added —
+> R²≈0, RMSE outlier-dominated (§23 #15). Outlier filtering is now implemented in
+> `data_cleaning.py` (§23 #16) but **not yet re-run against real data to confirm it
+> helps** — that's the next concrete step.
 > `src/{producers,streaming,dashboard}/` are still empty packages — Phase 7 (streaming)
 > logic still only exists as the notebook prototype in the separate `big_data_project/`
 > folder (`notebooks/`, `data/`) described in §23, not yet ported in.
@@ -359,12 +361,18 @@ of silently proceeding.
 8. Investigate extreme outliers using approximate quantiles.
 9. Choose either controlled outlier filtering or `log1p` transformation of the target,
    and document the choice.
-   > **Under revisit (2026-08-11).** The log1p-only choice documented in
-   > `src/training/data_cleaning.py` and §23 Known Issue #15 wasn't sufficient on its
-   > own — the first real-data training run showed every model's RMSE dominated by
-   > extreme salary values (max $74,351,432 in this dataset) even with log1p applied.
-   > **Next session:** add real outlier filtering (cap and/or remove extreme values)
-   > alongside log1p, then re-run Phase 4/5 and compare. See §23 for the full numbers.
+   > **Revised to use both together (2026-08-11).** The original log1p-only choice
+   > wasn't sufficient — the first real-data training run showed every model's RMSE
+   > dominated by extreme salary values (max $74,351,432 in this dataset) even with
+   > log1p applied (§23 #15). `src/training/data_cleaning.py` now drops rows with
+   > `label > MAX_PLAUSIBLE_SALARY` (default $1,000,000, `config/settings.py`) as
+   > implausible — almost certainly data-entry errors, not real salaries — *before*
+   > applying log1p to the rest. $1M is a documented domain-judgment call (this
+   > dataset's p99 is ~$400K), not derived from the data, so it's configurable. Code
+   > change is unit-tested (`tests/test_cleaning.py::
+   > test_clean_dataset_drops_implausibly_high_salaries`); **re-running Phase 4/5
+   > against the real dataset to confirm it actually improves RMSE/R² is the
+   > next step** — see §23 #16.
 10. Save row counts before and after every major cleaning step.
 
 ## 11. Feature Engineering
@@ -595,15 +603,18 @@ DASHBOARD_PREDICTION_TIMEOUT_SECONDS=30
 
 ## 23. Status / Next Step
 
-**Next session starts with: implementing real outlier handling for the target
-(`ConvertedCompYearly`).** §10.9 originally chose log1p-only (no hard filtering), based
-on the notebook prototype's results. The first successful real-data run of the full
-Phase 4/5 pipeline (2026-08-11, §23 #15 below) shows that decision isn't sufficient on
-its own: every model's R² is ≈0 and RMSE (~700K) is wildly out of proportion to MAE
-(~43-49K), consistent with one or a few extreme salary values (max in this dataset:
-$74,351,432) dominating the metric. Revisit §10.8-10.9: likely a hard cap/removal of
-extreme values in addition to (or instead of) log1p, then re-run Phase 4/5 to see if
-RMSE/R² improve. See §23 #15 for the full numbers and reasoning.
+**Next session starts with: confirming the outlier fix actually improves RMSE/R² on the
+VM.** §10.9 originally chose log1p-only (no hard filtering), based on the notebook
+prototype's results. The first successful real-data run of the full Phase 4/5 pipeline
+(2026-08-11, §23 #15) showed that decision wasn't sufficient on its own: every model's R²
+was ≈0 and RMSE (~700K) was wildly out of proportion to MAE (~43-49K), consistent with
+one or a few extreme salary values (max in this dataset: $74,351,432) dominating the
+metric. The fix is now implemented and unit-tested (§23 #16): `data_cleaning.py` drops
+rows above `MAX_PLAUSIBLE_SALARY` ($1M default) before applying `log1p`. **What's not
+done yet: actually re-running `run_training_pipeline()` on the VM with this change and
+comparing the new numbers against #15's table** — a local verification attempt was
+abandoned as too slow on this dev machine (§23 #16), so this hasn't been empirically
+confirmed to help yet, only implemented on sound reasoning.
 
 Completed so far (investigation only, per the plan's own "begin with investigation and
 planning only" instruction):
@@ -842,6 +853,19 @@ before treating any of it as final.
       rows on RMSE. **Agreed next step (2026-08-11): implement real outlier handling**
       (capping and/or removing extreme salaries like the $74M row) as the next thing to
       work on, before doing anything else with Phase 4/5.
+16. **Implemented outlier filtering (2026-08-11).** `src/training/data_cleaning.py`
+    (§10.9) now drops rows with `label > MAX_PLAUSIBLE_SALARY` (default $1,000,000, new
+    setting in `config/settings.py`/`.env.example`) before applying `log1p` to the rest —
+    see the §10.9 note above for the full reasoning. Unit-tested
+    (`test_clean_dataset_drops_implausibly_high_salaries`, confirming a row exactly at
+    the cap is kept and rows above it are dropped), 7/7 `test_cleaning.py` tests passing.
+    **Not yet empirically confirmed to improve RMSE/R²** — a local full-pipeline
+    verification against the real dataset was started but was still running after 27+
+    minutes on this Windows dev machine (far slower here than the ~5.6 minutes the VM
+    took for the equivalent tuning work previously), so it was abandoned in favor of
+    pushing the code for direct VM testing rather than waiting. **Re-running
+    `run_training_pipeline()` on the VM and comparing the new RMSE/MAE/R² numbers against
+    #15's table above is the concrete next step.**
 
 ## 24. Step-by-Step Execution Checklist
 
