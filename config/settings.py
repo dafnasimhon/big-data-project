@@ -88,6 +88,9 @@ PREDICTION_CHECKPOINT_PATH = _env_path(
 ANALYTICS_CHECKPOINT_PATH = _env_path(
     "ANALYTICS_CHECKPOINT_PATH", "./checkpoints/developer_events"
 )
+DEAD_LETTER_CHECKPOINT_PATH = _env_path(
+    "DEAD_LETTER_CHECKPOINT_PATH", "./checkpoints/salary_dead_letter"
+)
 
 # Reproducibility / feature engineering
 RANDOM_SEED = _env_int("RANDOM_SEED", 42)

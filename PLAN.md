@@ -1119,23 +1119,37 @@ work through together. Checked items are done; unchecked items are next.
 - **Completion check:** events appear in `developer_events`
 
 ### Phase 7 — Prediction and analytics streams
-- [x] 7.1 Core logic proven end-to-end in `notebooks/04_Spark_Streaming_Prediction.ipynb`:
-      reads `salary_requests` via Structured Streaming with an explicit schema, applies
-      the saved `PipelineModel`, reverses `log1p` via `expm1`, publishes to
-      `salary_predictions`. **Gaps before this counts as done:** no `salary_dead_letter`
-      handling, no required-field validation, uses a Spark-generated temp checkpoint
-      rather than `checkpoints/salary_predictions/`. Not yet extracted to
-      `src/streaming/prediction_stream.py`
+- [x] 7.1 `src/streaming/prediction_stream.py` (2026-08-15) — ports and fixes the
+      notebook prototype's gaps: reads `salary_requests` via `SALARY_REQUEST_SCHEMA`
+      (now consistent with `feature_pipeline.py`'s actual raw-column expectations,
+      unlike the notebook's stale `LanguageCount`-style schema), applies the saved
+      `PipelineModel`, reverses `log1p` via the shared `reverse_log1p_predictions()`
+      helper, publishes to `salary_predictions` keyed by `request_id`. **Adds what the
+      notebook was missing:** `salary_dead_letter` routing for requests missing
+      `request_id` (§16 step 8), `'Unknown'`-filling for missing non-required fields
+      (avoids crashing `RegexTokenizer` on nulls), `model_name`/`model_version` read
+      from the real `model_metadata.json` instead of hardcoded, real
+      `checkpoints/salary_predictions/` + `checkpoints/salary_dead_letter/` (new
+      `DEAD_LETTER_CHECKPOINT_PATH` setting) instead of a Spark temp dir, and a
+      SIGTERM/SIGINT handler for graceful shutdown (§16 step 9). Pure transformation
+      logic (`parse_requests`, `split_valid_and_dead_letters`, `build_predictions`,
+      `to_kafka_rows`) is unit-tested against batch DataFrames — Structured Streaming's
+      read/write-stream wiring itself isn't testable without a real Kafka broker, which
+      isn't available outside the VM
 - [ ] 7.2 `src/streaming/analytics_stream.py` — not started (no `developer_events`
       producer or aggregation logic exists yet)
-- [ ] 7.3 `scripts/start_prediction_stream.sh` — not started
-- [ ] 7.4 `src/producers/prediction_request_producer.py` — not started; test requests were
-      published manually/ad hoc during the notebook run
-- [x] 7.5 Manually published requests and confirmed matching predictions appeared (visible
-      in the notebook's `salary_prediction_results` in-memory table, keyed by
-      `request_id`)
-- **Completion check:** Spark consumes and publishes valid results — met for the
-  prediction stream in prototype form; analytics stream (Phase 15/§15) not started
+- [ ] 7.3 `scripts/start_prediction_stream.sh` — not started (Python entry point exists:
+      `python -m src.streaming.prediction_stream`)
+- [ ] 7.4 `src/producers/prediction_request_producer.py` — not started; manual/ad hoc
+      publishing (as the notebook did) is still how this would be tested for now
+- [x] 7.5 Manually published requests and confirmed matching predictions appeared,
+      confirmed originally in the notebook prototype (`salary_prediction_results`
+      in-memory table, keyed by `request_id`); the ported module's equivalent behavior
+      is covered by `test_build_predictions_reverses_log1p_and_shapes_response`
+- **Completion check:** Spark consumes and publishes valid results — met and improved
+  on for the prediction stream (dead-letter path, real checkpoints, graceful shutdown
+  now present); **not yet run against a real Kafka broker on the VM** — only unit-tested
+  locally against batch DataFrames. Analytics stream (Phase 15/§15) not started
 
 ### Phase 8 — Dashboard
 - [ ] 8.1 `src/dashboard/app.py` — personal prediction page (§17): inputs for all
