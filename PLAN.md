@@ -271,22 +271,20 @@ salary-prediction-big-data/
     `-- test_prediction_flow.py
 ```
 
-> **Current actual layout (2026-08-11).** The skeleton exists (`data/{raw,samples,
+> **Current actual layout (2026-08-15).** The skeleton exists (`data/{raw,samples,
 > processed}/`, `models/`, `checkpoints/`, `config/settings.py`, `scripts/`, `tests/` —
-> see Phase 1 in §24), and Phases 2–5 have real, tested code in it, **now confirmed
-> working end-to-end against the real 89,184-row dataset on the actual VM** (§23 #15):
-> `src/common/{logging_config,spark_session,schemas,feature_config,spark_utils}.py`,
-> `src/exploration/explore_dataset.py`, `src/training/{data_loader,data_cleaning,
-> feature_pipeline,data_split,model_candidates,tune_models,select_best_model,
-> train_final_model,evaluate_model}.py`, plus 31 passing pytest tests. `models/` has real
-> content from the first run (`model_comparison.csv`, `model_metadata.json`,
-> `model_metrics.json`, `best_salary_model/`), from before outlier filtering was added —
-> R²≈0, RMSE outlier-dominated (§23 #15). Outlier filtering is now implemented in
-> `data_cleaning.py` (§23 #16) but **not yet re-run against real data to confirm it
-> helps** — that's the next concrete step.
-> `src/{producers,streaming,dashboard}/` are still empty packages — Phase 7 (streaming)
-> logic still only exists as the notebook prototype in the separate `big_data_project/`
-> folder (`notebooks/`, `data/`) described in §23, not yet ported in.
+> see Phase 1 in §24), and Phases 2–5 have real, tested code in it, **confirmed working
+> end-to-end against the real 89,184-row dataset on the actual VM, including outlier
+> handling** (§23 #17): `src/common/{logging_config,spark_session,schemas,feature_config,
+> spark_utils}.py`, `src/exploration/explore_dataset.py`, `src/training/{data_loader,
+> data_cleaning,feature_pipeline,data_split,model_candidates,tune_models,
+> select_best_model,train_final_model,evaluate_model}.py`, plus 31 passing pytest tests.
+> `models/` has real content (`model_comparison.csv`, `model_metadata.json`,
+> `model_metrics.json`, `best_salary_model/`) from the outlier-filtered run: selected
+> model `LinearRegression`, final test R²=0.4585 — a legitimate, working result, not just
+> passing code. `src/{producers,streaming,dashboard}/` are still empty packages — Phase 7
+> (streaming) logic still only exists as the notebook prototype in the separate
+> `big_data_project/` folder (`notebooks/`, `data/`) described in §23, not yet ported in.
 
 ## 8. Kafka Topics and Message Contracts
 
@@ -603,18 +601,28 @@ DASHBOARD_PREDICTION_TIMEOUT_SECONDS=30
 
 ## 23. Status / Next Step
 
-**Next session starts with: confirming the outlier fix actually improves RMSE/R² on the
-VM.** §10.9 originally chose log1p-only (no hard filtering), based on the notebook
+**Outlier handling is done and confirmed working (2026-08-15) — R² went from ≈0 to
+0.46.** §10.9 originally chose log1p-only (no hard filtering), based on the notebook
 prototype's results. The first successful real-data run of the full Phase 4/5 pipeline
-(2026-08-11, §23 #15) showed that decision wasn't sufficient on its own: every model's R²
-was ≈0 and RMSE (~700K) was wildly out of proportion to MAE (~43-49K), consistent with
-one or a few extreme salary values (max in this dataset: $74,351,432) dominating the
-metric. The fix is now implemented and unit-tested (§23 #16): `data_cleaning.py` drops
-rows above `MAX_PLAUSIBLE_SALARY` ($1M default) before applying `log1p`. **What's not
-done yet: actually re-running `run_training_pipeline()` on the VM with this change and
-comparing the new numbers against #15's table** — a local verification attempt was
-abandoned as too slow on this dev machine (§23 #16), so this hasn't been empirically
-confirmed to help yet, only implemented on sound reasoning.
+(2026-08-11, §23 #15) showed that wasn't sufficient: every model's R² was ≈0 and RMSE
+(~700K) was wildly out of proportion to MAE (~43-49K) — a handful of extreme salary
+values (max $74,351,432) dominating the metric. Fixed by dropping rows above
+`MAX_PLAUSIBLE_SALARY` ($1M) before `log1p` (§23 #16), and **confirmed decisively on the
+VM (§23 #17): RMSE dropped ~11-12x (700K→59K), R² rose from 0.0025 to 0.4623 (validation)
+/ 0.4585 (final test)**, from dropping just ~0.13% of rows. Phase 4/5 is now in solid
+shape both procedurally and substantively.
+
+**Next session: no single mandated next step — pick from what's still open.** Options,
+roughly in likely order of value:
+- Widen the tuning grids/fold count back up (§23 #14 cut them hard for speed/memory
+  reasons that no longer bind as tightly now that Employment's cardinality bug is also
+  fixed) — might improve on R²=0.46 further, now that a full run is fast and reliable.
+- Port Phase 7 (Kafka streaming prediction) from the notebook prototype into
+  `src/streaming/` — the biggest remaining unported piece (§24).
+- `scripts/train_and_select_model.sh` (§24 Phase 5.4) — thin wrapper around the already-
+  working `python -m src.training.evaluate_model`.
+- Phase 6 (Kafka dataset producer), Phase 8 (dashboard), Phase 9 (tests/docs) — not
+  started at all yet.
 
 Completed so far (investigation only, per the plan's own "begin with investigation and
 planning only" instruction):
@@ -859,13 +867,29 @@ before treating any of it as final.
     see the §10.9 note above for the full reasoning. Unit-tested
     (`test_clean_dataset_drops_implausibly_high_salaries`, confirming a row exactly at
     the cap is kept and rows above it are dropped), 7/7 `test_cleaning.py` tests passing.
-    **Not yet empirically confirmed to improve RMSE/R²** — a local full-pipeline
-    verification against the real dataset was started but was still running after 27+
-    minutes on this Windows dev machine (far slower here than the ~5.6 minutes the VM
-    took for the equivalent tuning work previously), so it was abandoned in favor of
-    pushing the code for direct VM testing rather than waiting. **Re-running
-    `run_training_pipeline()` on the VM and comparing the new RMSE/MAE/R² numbers against
-    #15's table above is the concrete next step.**
+17. **Outlier fix confirmed on the VM — it worked, decisively (2026-08-15).**
+    `run_training_pipeline()` re-run against the real dataset with the fix in place.
+    Only 60 rows dropped (48,016 → 47,956 cleaned rows, ~0.13%), for a dramatic result:
+
+    | Model | RMSE (§23 #15 → now) | MAE (#15 → now) | R² (#15 → now) |
+    |---|---|---|---|
+    | LinearRegression (selected) | 700,079 → **59,158** | 43,702 → **31,319** | 0.0025 → **0.4623** |
+    | DecisionTreeRegressor | 700,162 → 62,846 | 49,037 → 36,329 | 0.0022 → 0.3932 |
+    | RandomForestRegressor | 700,212 → 65,401 | 49,768 → 37,526 | 0.0021 → 0.3428 |
+    | GBTRegressor | 702,852 → 62,767 | 48,466 → 35,085 | -0.0055 → 0.3947 |
+
+    Final test evaluation (touched once) for the selected `LinearRegression`: **RMSE
+    58,323, MAE 30,429, R² 0.4585** — the model now explains ~46% of salary variance,
+    a legitimate, respectable result for self-reported survey data with this feature set
+    (R² in the 0.3–0.6 range is a realistic ceiling for this kind of noisy data, not a
+    sign of a remaining problem). Confirms the RMSE-domination theory in #15 precisely:
+    removing ~0.13% of rows (the most extreme outliers) cut RMSE by ~11-12x. Model
+    selection is also now meaningful rather than noise — `LinearRegression` beats the
+    next-best model (`GBTRegressor`, 62,767) by a real ~6% margin, not the near-identical
+    numbers all 4 models had before. **This closes out the outlier-handling work someone
+    flagged as the priority next step — Phase 4/5 is now in good shape both
+    procedurally (leakage-free, real tuning, correct artifacts) and substantively (a
+    real, working, moderately-accurate model).**
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -970,21 +994,23 @@ work through together. Checked items are done; unchecked items are next.
       `evaluate_model.write_model_comparison()` writes it to the exact
       `models/model_comparison.csv` path/schema §12 specifies
 - **Completion check:** comparison table produced — **met, and confirmed against the real
-  89,184-row dataset on the VM (2026-08-11, §23 Known Issue #15)**: all 4 models tuned
-  successfully, real RMSE/MAE/R² per model recorded. R² near zero for every model —
-  see #15 for the honest read of what that means and the outlier-handling follow-up
+  89,184-row dataset on the VM**: all 4 models tuned successfully. First run (2026-08-11,
+  §23 #15) showed R² near zero for every model, traced to outlier domination; after the
+  §10.9 outlier fix, re-confirmed (2026-08-15, §23 #17) with real R² up to 0.4623 — a
+  legitimate, working result
 
 ### Phase 5 — Select winner and final test evaluation
 - [x] 5.1 `src/training/select_best_model.py` — RMSE → MAE → R² tie-break rule from §12,
       with a relative-tolerance tie check. Unit-tested directly, including both tie-break
-      branches (`tests/test_select_best_model.py`); confirmed on real data (§23 #15) —
-      `LinearRegression` selected, though the 4 models were statistically indistinguishable
+      branches (`tests/test_select_best_model.py`); confirmed on real data —
+      `LinearRegression` selected both before and after the outlier fix, now by a real
+      ~6% margin over the next-best model rather than statistically-indistinguishable noise
 - [x] 5.2 `src/training/train_final_model.py` — refits the selected model type +
       hyperparameters on `cv_train + validation` combined, evaluates **exactly once** on
       the untouched `test` slice, reverses `log1p` via `expm1` with negative/NaN clipping
       (§13). This closes the "evaluate once on untouched test data" gap — Known Issue #1
-      in §23 is now resolved. Confirmed on real data: final test RMSE 760,542 / MAE
-      39,209 / R² 0.0039
+      in §23 is now resolved. Confirmed on real data after the outlier fix (§23 #17):
+      final test RMSE 58,323 / MAE 30,429 / R² 0.4585
 - [x] 5.3 `src/training/evaluate_model.py` — writes `models/model_metadata.json` and
       `models/model_metrics.json` in the exact §12 schema and saves the full
       `PipelineModel` via `.write().overwrite().save(...)` to `models/best_salary_model/`.
@@ -996,9 +1022,9 @@ work through together. Checked items are done; unchecked items are next.
       / `run_training_pipeline()`; the shell wrapper around it for the VM is what's
       missing)
 - **Completion check:** best PipelineModel and metadata saved — **met and confirmed
-  against real data**. Only 5.4's shell wrapper remains outstanding. **Model quality
-  itself is weak (R²≈0, RMSE outlier-dominated) — implementing real outlier handling is
-  the agreed next step (§23 #15) before doing anything else here.**
+  against real data, with a legitimately working model (R²=0.4585 final test)** after the
+  outlier fix (§23 #17). Only 5.4's shell wrapper remains outstanding — everything else
+  in Phase 4/5 is done, tested, and validated against real data.
 
 ### Phase 6 — Kafka dataset producer
 - [ ] 6.1 `src/producers/dataset_producer.py` — reads CSV gradually, adds `event_id`/
