@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings even when checked out on Windows - a CRLF
+# shebang line (#!/usr/bin/env bash\r) fails with "bad interpreter" errors on Linux,
+# which is where these scripts are actually meant to run (the VM).
+*.sh text eol=lf

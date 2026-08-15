@@ -1212,9 +1212,11 @@ work through together. Checked items are done; unchecked items are next.
       `notebooks/run_prediction_stream.ipynb` documents the fix)
 - [ ] 7.2 `src/streaming/analytics_stream.py` — not started (no `developer_events`
       producer or aggregation logic exists yet)
-- [ ] 7.3 `scripts/start_prediction_stream.sh` — not started (Python entry point exists
-      and confirmed working: `python -m src.streaming.prediction_stream`, or
-      interactively via `notebooks/run_prediction_stream.ipynb`)
+- [ ] 7.3 `scripts/start_prediction_stream.sh` (the CLI wrapper around
+      `python -m src.streaming.prediction_stream`) — still not started. **Added instead
+      (2026-08-15):** `scripts/start_kafka_jupyter.sh`, launching Jupyter through
+      `pyspark --packages ...` (§23 #22's fix) so `notebooks/run_prediction_stream.ipynb`
+      has a working Kafka-enabled session without retyping the launch command each time
 - [ ] 7.4 `src/producers/prediction_request_producer.py` — not started as a standalone
       script, but `notebooks/run_prediction_stream.ipynb` now has a working
       `confluent_kafka`-based test-request publisher (§5 of that notebook) that could be
