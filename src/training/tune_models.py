@@ -21,20 +21,33 @@ was run in, that reconnection intermittently failed under load
 (`ConnectionRefusedError`, reproduced twice, including mid-`RandomForestRegressor`)
 while every same-thread Spark call worked reliably throughout. `cross_validate()` below
 does the identical fold-splitting/fit/evaluate/refit-on-all-data work as
-`CrossValidator`, entirely on the calling thread — since `parallelism=1` meant
-`CrossValidator` never actually ran folds concurrently anyway, this is not a performance
-regression, just a strictly more robust way to get the same result.
+`CrossValidator`.
+
+**Concurrency (2026-08-15):** `TUNING_PARALLELISM` (`config/settings.py`, default 4) now
+controls how many (param combination, fold) fits run concurrently via background threads
+— deliberately reintroducing the class of risk described above, in order to use the VM's
+16 cores and cut wall-clock tuning time now that a reliable sequential baseline exists to
+fall back to. Each concurrent fit is wrapped with `pyspark.util.inheritable_thread_target`
+(the same mechanism `CrossValidator` itself uses internally) so JVM thread-local state is
+propagated correctly. **If `ConnectionRefusedError` recurs, set `TUNING_PARALLELISM=1`**
+— that reproduces the exact sequential behavior this module used before, which is proven
+reliable. `Pipeline`/regressor instances aren't mutated by concurrent `.fit()` calls
+(each call internally does `self.copy(params)._fit(dataset)`), and `stages_factory()`
+builds fresh, unshared stage instances per call, so concurrent fits don't share mutable
+state with each other.
 """
 
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from pyspark.ml import Pipeline
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
+from pyspark.util import inheritable_thread_target
 
 from config import settings
 from src.common.logging_config import get_logger
@@ -44,7 +57,7 @@ from src.training.model_candidates import ModelCandidate, build_candidates
 
 logger = get_logger(__name__)
 
-NUM_FOLDS = 2
+NUM_FOLDS = 3
 
 
 @dataclass
@@ -92,31 +105,59 @@ def cross_validate(
     data: DataFrame,
     num_folds: int = NUM_FOLDS,
     seed: int = 42,
+    parallelism: int | None = None,
 ):
     """Hand-rolled equivalent of `pyspark.ml.tuning.CrossValidator` — see module
-    docstring for why. `stages_factory` is a zero-arg callable returning a fresh list of
-    Pipeline stages (feature stages + regressor) for each fit call.
+    docstring for why this exists and how `parallelism` is used safely.
+    `stages_factory` is a zero-arg callable returning a fresh list of Pipeline stages
+    (feature stages + regressor) for each fit call.
 
     Returns (best_model, best_params_map): `best_model` is fit on the *entire* `data`
     using the best-found params (matching `CrossValidatorModel.bestModel`'s behavior).
     """
+    parallelism = settings.TUNING_PARALLELISM if parallelism is None else parallelism
+
+    data = data.repartition(settings.SPARK_SHUFFLE_PARTITIONS)
     fold_dfs = data.randomSplit([1.0] * num_folds, seed=seed)
 
-    avg_metrics = []
-    for params in param_grid:
-        fold_metrics = []
-        for held_out_index in range(num_folds):
-            train_fold = None
-            for fold_index, fold_df in enumerate(fold_dfs):
-                if fold_index == held_out_index:
-                    continue
-                train_fold = fold_df if train_fold is None else train_fold.unionByName(fold_df)
+    fold_splits = []
+    for held_out_index in range(num_folds):
+        train_fold = None
+        for fold_index, fold_df in enumerate(fold_dfs):
+            if fold_index == held_out_index:
+                continue
+            train_fold = fold_df if train_fold is None else train_fold.unionByName(fold_df)
+        held_out_fold = fold_dfs[held_out_index].repartition(settings.SPARK_SHUFFLE_PARTITIONS)
+        train_fold = train_fold.repartition(settings.SPARK_SHUFFLE_PARTITIONS)
+        fold_splits.append((train_fold, held_out_fold))
 
-            model = Pipeline(stages=stages_factory()).fit(train_fold, params)
-            metric = evaluator.evaluate(model.transform(fold_dfs[held_out_index]))
-            fold_metrics.append(metric)
+    def fit_and_evaluate(param_index: int, fold_index: int) -> tuple[int, float]:
+        train_fold, held_out_fold = fold_splits[fold_index]
+        model = Pipeline(stages=stages_factory()).fit(train_fold, param_grid[param_index])
+        metric = evaluator.evaluate(model.transform(held_out_fold))
+        return param_index, metric
 
-        avg_metrics.append(sum(fold_metrics) / len(fold_metrics))
+    tasks = [
+        (param_index, fold_index)
+        for param_index in range(len(param_grid))
+        for fold_index in range(num_folds)
+    ]
+
+    metrics_by_param: list[list[float]] = [[] for _ in param_grid]
+
+    if parallelism <= 1:
+        for param_index, fold_index in tasks:
+            resolved_index, metric = fit_and_evaluate(param_index, fold_index)
+            metrics_by_param[resolved_index].append(metric)
+    else:
+        wrapped_fit = inheritable_thread_target(fit_and_evaluate)
+        with ThreadPoolExecutor(max_workers=parallelism) as executor:
+            futures = [executor.submit(wrapped_fit, param_index, fold_index) for param_index, fold_index in tasks]
+            for future in as_completed(futures):
+                resolved_index, metric = future.result()
+                metrics_by_param[resolved_index].append(metric)
+
+    avg_metrics = [sum(metrics) / len(metrics) for metrics in metrics_by_param]
 
     if evaluator.isLargerBetter():
         best_index = max(range(len(avg_metrics)), key=lambda i: avg_metrics[i])
@@ -134,7 +175,10 @@ def tune_candidate(candidate: ModelCandidate, cv_train_df: DataFrame, validation
     def stages_factory():
         return build_feature_stages() + [candidate.regressor]
 
-    logger.info("Tuning %s over %d parameter combinations", candidate.name, len(candidate.param_grid))
+    logger.info(
+        "Tuning %s over %d parameter combinations x %d folds (parallelism=%d)",
+        candidate.name, len(candidate.param_grid), NUM_FOLDS, settings.TUNING_PARALLELISM,
+    )
     started_at = time.time()
     best_model, _best_params_map = cross_validate(
         stages_factory, candidate.param_grid, evaluator, cv_train_df, seed=settings.RANDOM_SEED

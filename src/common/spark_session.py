@@ -23,6 +23,8 @@ def get_spark_session(app_name: str | None = None, with_kafka: bool = False) -> 
         SparkSession.builder.appName(app_name or settings.SPARK_APP_NAME)
         .master(settings.SPARK_MASTER_URL)
         .config("spark.driver.memory", settings.SPARK_DRIVER_MEMORY)
+        .config("spark.sql.shuffle.partitions", settings.SPARK_SHUFFLE_PARTITIONS)
+        .config("spark.default.parallelism", settings.SPARK_SHUFFLE_PARTITIONS)
     )
 
     if with_kafka:

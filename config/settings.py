@@ -34,8 +34,28 @@ SPARK_APP_NAME = _env("SPARK_APP_NAME", "TechSalaryPrediction")
 # yet) - driver heap size is fixed at JVM startup and can't be changed on an
 # already-running session. Raised from Spark's small default after a real
 # OutOfMemoryError training RandomForestRegressor on the VM (2026-08-11, see
-# model_candidates.py).
-SPARK_DRIVER_MEMORY = _env("SPARK_DRIVER_MEMORY", "4g")
+# model_candidates.py); raised again 2026-08-15 (4g->6g) since TUNING_PARALLELISM now
+# means multiple tree ensembles can be mid-training on the driver JVM simultaneously,
+# which increases peak memory pressure versus the earlier strictly-sequential fitting.
+SPARK_DRIVER_MEMORY = _env("SPARK_DRIVER_MEMORY", "6g")
+# Number of partitions Spark uses for shuffles (StringIndexer/CountVectorizer vocab
+# building, groupBy, tree split-finding, etc.) and the target partition count for
+# cv_train/validation/test after splitting. Spark's own default (200) is tuned for large
+# multi-node clusters, not a single local[*] VM - on this project's ~29K-row cv_train
+# slice, 200 tiny partitions add scheduling overhead without adding real parallelism.
+# Set to roughly the VM's core count (see SparkSession.sparkContext.defaultParallelism,
+# or `nproc` on the VM) so every individual model fit actually uses all available cores.
+SPARK_SHUFFLE_PARTITIONS = _env_int("SPARK_SHUFFLE_PARTITIONS", 16)
+# Number of (hyperparameter combination, CV fold) fits tune_models.cross_validate() runs
+# concurrently, via background threads (see tune_models.py module docstring). Concurrency
+# beyond 1 re-introduces the same class of risk as pyspark.ml.tuning.CrossValidator's own
+# background-thread fitting, which caused a real ConnectionRefusedError in this project's
+# VM Jupyter session before (PLAN.md §23 #13) - that's why tune_models.py replaced
+# CrossValidator with a hand-rolled sequential loop in the first place. This setting
+# reintroduces concurrency deliberately (to use the VM's 16 cores and cut wall-clock
+# tuning time), but keep TUNING_PARALLELISM=1 as the known-safe fallback if that error
+# recurs.
+TUNING_PARALLELISM = _env_int("TUNING_PARALLELISM", 4)
 
 # Paths (relative to the repo root unless overridden)
 DATASET_PATH = _env("DATASET_PATH", "./data/raw/survey_results_public.csv")

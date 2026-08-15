@@ -612,11 +612,24 @@ VM (§23 #17): RMSE dropped ~11-12x (700K→59K), R² rose from 0.0025 to 0.4623
 / 0.4585 (final test)**, from dropping just ~0.13% of rows. Phase 4/5 is now in solid
 shape both procedurally and substantively.
 
-**Next session: no single mandated next step — pick from what's still open.** Options,
-roughly in likely order of value:
-- Widen the tuning grids/fold count back up (§23 #14 cut them hard for speed/memory
-  reasons that no longer bind as tightly now that Employment's cardinality bug is also
-  fixed) — might improve on R²=0.46 further, now that a full run is fast and reliable.
+**Widened the tuning grids back up with real parallelism (2026-08-15) — not yet run on
+the VM.** §23 #14 had cut grids hard (1 tuned hyperparameter/2 values per model,
+`NUM_FOLDS=2`) for speed/memory reasons. Reverted that cut properly rather than just
+restoring the old numbers: `NUM_FOLDS` back to 3, each model now tunes 2 hyperparameters
+over ~6 combinations (76 total pipeline fits across all 4 models, vs. 20 before), and
+`tune_models.cross_validate()` now runs `TUNING_PARALLELISM` (default 4) of those fits
+*concurrently* via background threads on the VM's 16 cores, instead of one at a time —
+see §23 #18 below for the full reasoning, including why this deliberately re-introduces
+the same class of risk that caused the `ConnectionRefusedError` fixed in #13 (with
+`TUNING_PARALLELISM=1` as the documented, known-safe fallback if it recurs).
+`RandomForestRegressor`/`GBTRegressor` ceilings stay moderate (not restored to their
+original pre-OOM values) since concurrent fits increase peak memory pressure rather than
+reducing it. **Next step: pull and re-run `run_training_pipeline()` on the VM** — confirm
+(a) no `ConnectionRefusedError`/`OutOfMemoryError` recurrence, (b) it's actually faster
+than the ~5.6 minutes the narrower sequential grids took, and (c) whether R²=0.4623
+improves with the wider search.
+
+Other options once that's confirmed, roughly in likely order of value:
 - Port Phase 7 (Kafka streaming prediction) from the notebook prototype into
   `src/streaming/` — the biggest remaining unported piece (§24).
 - `scripts/train_and_select_model.sh` (§24 Phase 5.4) — thin wrapper around the already-
@@ -890,6 +903,42 @@ before treating any of it as final.
     flagged as the priority next step — Phase 4/5 is now in good shape both
     procedurally (leakage-free, real tuning, correct artifacts) and substantively (a
     real, working, moderately-accurate model).**
+18. **Widened tuning grids + real concurrency for the VM's 16 cores (2026-08-15) —
+    implemented, not yet run.** Explicitly requested: restore the grids/folds cut in #14
+    for speed, but keep it fast by actually using Spark/the VM's cores rather than
+    reducing search breadth again. Three changes together:
+    - **`SPARK_SHUFFLE_PARTITIONS`** (`config/settings.py`, default 16): applied to
+      `spark.sql.shuffle.partitions`/`spark.default.parallelism` in `get_spark_session()`.
+      Spark's own default (200) is tuned for large multi-node clusters; on this project's
+      ~29K-row `cv_train` slice it means hundreds of tiny partitions and scheduling
+      overhead instead of real parallelism. `tune_models.cross_validate()` also now
+      explicitly `.repartition(SPARK_SHUFFLE_PARTITIONS)`s `data` and each constructed
+      fold split, so every individual fit actually spreads across all 16 cores rather
+      than whatever partition count fell out of prior `randomSplit`/`unionByName` calls.
+    - **`TUNING_PARALLELISM`** (default 4): `cross_validate()` now runs this many
+      (param combination, fold) fits *concurrently* via `concurrent.futures.
+      ThreadPoolExecutor`, each wrapped with `pyspark.util.inheritable_thread_target` —
+      the same mechanism `pyspark.ml.tuning.CrossValidator` uses internally, and the
+      officially-documented way to submit Spark jobs from non-main threads. **This
+      deliberately re-introduces the class of risk fixed in #13**
+      (`ConnectionRefusedError` from background-thread py4j reconnection) — done
+      knowingly, because the risk was judged worth it to actually use the VM's cores, and
+      because `TUNING_PARALLELISM=1` reproduces the exact proven-reliable sequential
+      behavior as an easy, documented fallback if it recurs.
+    - **Grids widened** (`model_candidates.py`): each model now tunes 2 hyperparameters
+      over ~6 combinations (was 1 hyperparameter/2 values), `NUM_FOLDS` back to 3 (was
+      2) — 76 total pipeline fits (was 20). `RandomForestRegressor`/`GBTRegressor`
+      ceilings deliberately stay below their original pre-OOM values
+      (`numTrees`≤30/`maxDepth`≤8, `maxIter`≤30/`maxDepth`≤5) since concurrent fits mean
+      multiple tree ensembles can be mid-training simultaneously, increasing peak memory
+      pressure rather than reducing it — `SPARK_DRIVER_MEMORY` default also raised 4g→6g
+      for the same reason.
+    Local tests updated/passing against tiny synthetic data (confirms the concurrent code
+    path is correct — same results as sequential, `TUNING_PARALLELISM<=1` still works as
+    a plain sequential loop). **Not yet run against real data on the VM** — that's the
+    concrete next step: confirm no `ConnectionRefusedError`/`OutOfMemoryError`, confirm
+    it's actually faster than the prior ~5.6-minute sequential run, and see whether the
+    wider search improves on R²=0.4623.
 
 ## 24. Step-by-Step Execution Checklist
 
