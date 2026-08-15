@@ -42,3 +42,6 @@ Thumbs.db
 
 # Claude Code tooling state
 .claude/
+
+# Third-party course material shared for local reference only, not project content
+notebooks/Structured Streaming*.ipynb

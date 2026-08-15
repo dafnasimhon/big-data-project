@@ -284,9 +284,14 @@ salary-prediction-big-data/
 > (§23 #20): selected model `LinearRegression`, final test R²=0.4684 — a legitimate,
 > working, tuned result, not just passing code. Also added
 > `notebooks/run_training_pipeline.ipynb`, a ready-to-run VM notebook with explicit Spark
-> config verification. `src/{producers,streaming,dashboard}/` are still empty packages —
-> Phase 7 (streaming) logic still only exists as the notebook prototype in the separate
-> `big_data_project/` folder (`notebooks/`, `data/`) described in §23, not yet ported in.
+> config verification. `src/streaming/prediction_stream.py` is also done and **confirmed
+> against real Kafka on the VM** (§23 #21-23) — Kafka itself had to be stood up on the VM
+> for the first time, with a genuinely important environment fix along the way (the
+> Kafka connector JAR can only be added at PySpark process launch, not via `.config()`
+> afterward; `notebooks/run_prediction_stream.ipynb` documents the working launch
+> command and doubles as a self-contained test harness: starts the stream, publishes a
+> test request via `confluent_kafka`, reads back the result). `src/{producers,
+> dashboard}/` and `src/streaming/analytics_stream.py` are still not started.
 
 ## 8. Kafka Topics and Message Contracts
 
@@ -628,13 +633,24 @@ took, i.e. ~4x the search for no extra time — and validation R² improved 0.46
 final test R² 0.4585→0.4684.** Phase 4/5 is now done, tested, and tuned about as far as
 this feature set is likely to go without new features or a different modeling approach.
 
+**Phase 7 prediction stream ported and confirmed against real Kafka (2026-08-15).**
+`src/streaming/prediction_stream.py` reads `salary_requests`, applies the saved model,
+reverses `log1p`, publishes to `salary_predictions`, and routes invalid requests to
+`salary_dead_letter` — fixing several gaps in the notebook prototype (§23 #21-23 for the
+full story, including standing up Kafka on the VM for the first time and a genuinely
+important environment fix: the Kafka connector JAR can only be added at PySpark process
+launch, not via `.config()` afterward — `notebooks/run_prediction_stream.ipynb`
+documents the working launch command). **Confirmed end-to-end**: a real request got a
+real prediction (`$82,046.35`), an invalid one correctly landed on the dead-letter topic.
+
 Next options, roughly in likely order of value:
-- Port Phase 7 (Kafka streaming prediction) from the notebook prototype into
-  `src/streaming/` — the biggest remaining unported piece (§24).
-- `scripts/train_and_select_model.sh` (§24 Phase 5.4) — thin wrapper around the already-
-  working `python -m src.training.evaluate_model`.
-- Phase 6 (Kafka dataset producer), Phase 8 (dashboard), Phase 9 (tests/docs) — not
-  started at all yet.
+- `src/streaming/analytics_stream.py` (§15/Phase 7.2) — the other half of Phase 7,
+  not started (windowed aggregates over `developer_events`).
+- `src/producers/dataset_producer.py` (Phase 6) — needed to actually feed
+  `developer_events` for the analytics stream to have something to consume.
+- `scripts/start_prediction_stream.sh` / `scripts/train_and_select_model.sh` (§24
+  Phases 5.4/7.3) — thin shell wrappers around already-working Python entry points.
+- Phase 8 (dashboard), Phase 9 (tests/docs) — not started at all yet.
 
 Completed so far (investigation only, per the plan's own "begin with investigation and
 planning only" instruction):
@@ -972,6 +988,59 @@ before treating any of it as final.
     one fixed held-out sample rather than a red flag. Mean baseline: RMSE 78,352, R²≈0, as
     expected. **This closes out the explicit request to widen the grids using real
     Spark/VM capabilities rather than trading off search breadth for speed.**
+21. **Kafka broker set up on the VM for the first time (2026-08-15).** `KAFKA_HOME` was
+    still the `.env.example` placeholder (`/path/to/kafka`); real install found at
+    `/usr/local/kafka/kafka_2.13-3.2.1` (matching Lab3's own `cdk` alias). ZooKeeper +
+    broker started per Lab3's pattern (§6); all 5 required topics created
+    (`salary_requests`, `salary_predictions`, `developer_events`, `salary_dead_letter`,
+    `salary_analytics`). Confirmed reachable with the console producer/consumer. This is
+    §24 Phase 1.8-1.10, previously unconfirmed.
+22. **Found and fixed: the Kafka connector JAR can't be added to an already-running
+    Spark session (2026-08-15).** `run_prediction_stream.ipynb`'s `build_streams()`
+    call failed with `AnalysisException: Failed to find data source: kafka`, even after
+    explicitly configuring `spark.jars.packages` via `get_spark_session(with_kafka=
+    True)`. Diagnosis, confirmed step by step:
+    - No Kafka connector JAR bundled anywhere under `$SPARK_HOME` (`find ... -iname
+      "*kafka*.jar"` came back empty).
+    - `spark.jars.packages` config *was* being correctly set to
+      `org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0` — but `spark.jars` (actually
+      resolved/loaded jars) stayed empty, and `~/.ivy2` had no cached Kafka jars (never
+      successfully resolved).
+    - Ruled out lack of internet access: `curl` to Maven Central returned HTTP 200.
+    - Root cause, confirmed against a course-provided reference notebook ("Structured
+      Streaming With Examples", shared for local troubleshooting only — not project
+      content, not committed here), specifically its "Streaming from Kafka" section:
+      `--packages` must be supplied when the PySpark **process
+      itself** is launched (`pyspark --packages org.apache.spark:spark-sql-kafka-0-10_
+      2.12:<version>`) — it cannot be injected into an already-running JVM via
+      `.config(...)` from Python, no matter how the SparkSession is constructed. This
+      explains every earlier symptom in this project (stop+recreate "fixing" the
+      unrelated `ConnectionRefusedError` from §23 #13 but not this; `spark.driver.
+      memory` not applying to a reused session, §23 #16/#20's whole "verify config"
+      cell) — they're all the same underlying fact: JVM-level configuration is fixed at
+      process launch and Python-level `.config()` calls on a reused session are largely
+      cosmetic.
+    - **Fix:** relaunch Jupyter itself through the `pyspark` launcher script so every
+      notebook opened in that server inherits a Kafka-enabled session automatically:
+      `PYSPARK_DRIVER_PYTHON=jupyter PYSPARK_DRIVER_PYTHON_OPTS='notebook --no-browser
+      --port=8889' pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0`.
+      No code changes were needed once this was done — `get_spark_session(with_kafka=
+      False)`'s plain `getOrCreate()` correctly reuses the properly-launched session.
+    - This is VM/environment-specific setup, not something `src/` code can fix or paper
+      over — anyone else running this project needs to launch Jupyter the same way
+      before any Kafka-touching notebook (`run_prediction_stream.ipynb`) will work.
+23. **Phase 7 prediction stream confirmed working end-to-end against real Kafka
+    (2026-08-15).** Via `notebooks/run_prediction_stream.ipynb`: published a valid
+    request (Israel, back-end developer, 5 years experience, Bachelor's) to
+    `salary_requests`, and `salary_predictions` correctly produced
+    `{"request_id": "...", "prediction": 82046.35, "target_unit": "annual salary",
+    "model_name": "LinearRegression", "model_version": "2026-08-15T17:11:53...",
+    "status": "success"}` — a plausible number, correct shape, model name/version
+    correctly pulled from the real `model_metadata.json`. Separately published a
+    request with no `request_id`, confirmed it correctly landed on
+    `salary_dead_letter` with `error_reason: "missing or unparseable request_id"`
+    (twice, reproducibly). **This closes §24 Phase 7.5 for real** (previously only
+    verified in the notebook prototype).
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -1133,23 +1202,32 @@ work through together. Checked items are done; unchecked items are next.
       `DEAD_LETTER_CHECKPOINT_PATH` setting) instead of a Spark temp dir, and a
       SIGTERM/SIGINT handler for graceful shutdown (§16 step 9). Pure transformation
       logic (`parse_requests`, `split_valid_and_dead_letters`, `build_predictions`,
-      `to_kafka_rows`) is unit-tested against batch DataFrames — Structured Streaming's
-      read/write-stream wiring itself isn't testable without a real Kafka broker, which
-      isn't available outside the VM
+      `to_kafka_rows`) is unit-tested against batch DataFrames. **Confirmed against a
+      real Kafka broker on the VM (2026-08-15, §23 #23)**: a valid request correctly
+      produced a real prediction (`$82,046.35`, correct response shape, real
+      `model_name`/`model_version`); Kafka itself had to be set up on the VM for the
+      first time to test this (§23 #21), and a genuinely important environment issue
+      had to be found and fixed first (§23 #22 — the Kafka connector JAR can only be
+      added at PySpark process launch, not via `.config()` on a running session;
+      `notebooks/run_prediction_stream.ipynb` documents the fix)
 - [ ] 7.2 `src/streaming/analytics_stream.py` — not started (no `developer_events`
       producer or aggregation logic exists yet)
-- [ ] 7.3 `scripts/start_prediction_stream.sh` — not started (Python entry point exists:
-      `python -m src.streaming.prediction_stream`)
-- [ ] 7.4 `src/producers/prediction_request_producer.py` — not started; manual/ad hoc
-      publishing (as the notebook did) is still how this would be tested for now
-- [x] 7.5 Manually published requests and confirmed matching predictions appeared,
-      confirmed originally in the notebook prototype (`salary_prediction_results`
-      in-memory table, keyed by `request_id`); the ported module's equivalent behavior
-      is covered by `test_build_predictions_reverses_log1p_and_shapes_response`
-- **Completion check:** Spark consumes and publishes valid results — met and improved
-  on for the prediction stream (dead-letter path, real checkpoints, graceful shutdown
-  now present); **not yet run against a real Kafka broker on the VM** — only unit-tested
-  locally against batch DataFrames. Analytics stream (Phase 15/§15) not started
+- [ ] 7.3 `scripts/start_prediction_stream.sh` — not started (Python entry point exists
+      and confirmed working: `python -m src.streaming.prediction_stream`, or
+      interactively via `notebooks/run_prediction_stream.ipynb`)
+- [ ] 7.4 `src/producers/prediction_request_producer.py` — not started as a standalone
+      script, but `notebooks/run_prediction_stream.ipynb` now has a working
+      `confluent_kafka`-based test-request publisher (§5 of that notebook) that could be
+      extracted into one
+- [x] 7.5 **Confirmed on the real VM against a real Kafka broker (2026-08-15).**
+      Published a valid request, confirmed a matching prediction appeared on
+      `salary_predictions` with the correct shape and a plausible value; published an
+      invalid request (no `request_id`), confirmed it correctly landed on
+      `salary_dead_letter` instead (reproduced twice) — see §23 #23 for the full
+      request/response JSON
+- **Completion check:** Spark consumes and publishes valid results — **met and
+  confirmed against real Kafka**, both the happy path and the dead-letter path. Only
+  the analytics stream (§15, Phase 7.2) remains unstarted within this phase
 
 ### Phase 8 — Dashboard
 - [ ] 8.1 `src/dashboard/app.py` — personal prediction page (§17): inputs for all
