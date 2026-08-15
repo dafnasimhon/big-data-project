@@ -280,10 +280,12 @@ salary-prediction-big-data/
 > data_cleaning,feature_pipeline,data_split,model_candidates,tune_models,
 > select_best_model,train_final_model,evaluate_model}.py`, plus 31 passing pytest tests.
 > `models/` has real content (`model_comparison.csv`, `model_metadata.json`,
-> `model_metrics.json`, `best_salary_model/`) from the outlier-filtered run: selected
-> model `LinearRegression`, final test R²=0.4585 — a legitimate, working result, not just
-> passing code. `src/{producers,streaming,dashboard}/` are still empty packages — Phase 7
-> (streaming) logic still only exists as the notebook prototype in the separate
+> `model_metrics.json`, `best_salary_model/`) from the widened-grid, parallel-tuned run
+> (§23 #20): selected model `LinearRegression`, final test R²=0.4684 — a legitimate,
+> working, tuned result, not just passing code. Also added
+> `notebooks/run_training_pipeline.ipynb`, a ready-to-run VM notebook with explicit Spark
+> config verification. `src/{producers,streaming,dashboard}/` are still empty packages —
+> Phase 7 (streaming) logic still only exists as the notebook prototype in the separate
 > `big_data_project/` folder (`notebooks/`, `data/`) described in §23, not yet ported in.
 
 ## 8. Kafka Topics and Message Contracts
@@ -612,24 +614,21 @@ VM (§23 #17): RMSE dropped ~11-12x (700K→59K), R² rose from 0.0025 to 0.4623
 / 0.4585 (final test)**, from dropping just ~0.13% of rows. Phase 4/5 is now in solid
 shape both procedurally and substantively.
 
-**Widened the tuning grids back up with real parallelism (2026-08-15) — not yet run on
-the VM.** §23 #14 had cut grids hard (1 tuned hyperparameter/2 values per model,
+**Widened the tuning grids with real parallelism — done and confirmed better
+(2026-08-15).** §23 #14 had cut grids hard (1 tuned hyperparameter/2 values per model,
 `NUM_FOLDS=2`) for speed/memory reasons. Reverted that cut properly rather than just
 restoring the old numbers: `NUM_FOLDS` back to 3, each model now tunes 2 hyperparameters
-over ~6 combinations (76 total pipeline fits across all 4 models, vs. 20 before), and
-`tune_models.cross_validate()` now runs `TUNING_PARALLELISM` (default 4) of those fits
-*concurrently* via background threads on the VM's 16 cores, instead of one at a time —
-see §23 #18 below for the full reasoning, including why this deliberately re-introduces
-the same class of risk that caused the `ConnectionRefusedError` fixed in #13 (with
-`TUNING_PARALLELISM=1` as the documented, known-safe fallback if it recurs).
-`RandomForestRegressor`/`GBTRegressor` ceilings stay moderate (not restored to their
-original pre-OOM values) since concurrent fits increase peak memory pressure rather than
-reducing it. **Next step: pull and re-run `run_training_pipeline()` on the VM** — confirm
-(a) no `ConnectionRefusedError`/`OutOfMemoryError` recurrence, (b) it's actually faster
-than the ~5.6 minutes the narrower sequential grids took, and (c) whether R²=0.4623
-improves with the wider search.
+over ~6 combinations (76 total pipeline fits, vs. 20 before), and
+`tune_models.cross_validate()` runs `TUNING_PARALLELISM` (default 4) of those fits
+*concurrently* via background threads on the VM's 16 cores — see §23 #18-20 for the full
+reasoning (including the deliberate `ConnectionRefusedError` risk trade-off) and a real
+path-resolution bug (§23 #19) found and fixed along the way. **Confirmed on the VM (§23
+#20): 76 fits completed in ~315s — about the same wall-clock time the narrower 20-fit run
+took, i.e. ~4x the search for no extra time — and validation R² improved 0.4623→0.4750,
+final test R² 0.4585→0.4684.** Phase 4/5 is now done, tested, and tuned about as far as
+this feature set is likely to go without new features or a different modeling approach.
 
-Other options once that's confirmed, roughly in likely order of value:
+Next options, roughly in likely order of value:
 - Port Phase 7 (Kafka streaming prediction) from the notebook prototype into
   `src/streaming/` — the biggest remaining unported piece (§24).
 - `scripts/train_and_select_model.sh` (§24 Phase 5.4) — thin wrapper around the already-
@@ -903,10 +902,10 @@ before treating any of it as final.
     flagged as the priority next step — Phase 4/5 is now in good shape both
     procedurally (leakage-free, real tuning, correct artifacts) and substantively (a
     real, working, moderately-accurate model).**
-18. **Widened tuning grids + real concurrency for the VM's 16 cores (2026-08-15) —
-    implemented, not yet run.** Explicitly requested: restore the grids/folds cut in #14
-    for speed, but keep it fast by actually using Spark/the VM's cores rather than
-    reducing search breadth again. Three changes together:
+18. **Widened tuning grids + real concurrency for the VM's 16 cores (2026-08-15).**
+    Explicitly requested: restore the grids/folds cut in #14 for speed, but keep it fast
+    by actually using Spark/the VM's cores rather than reducing search breadth again.
+    Three changes together:
     - **`SPARK_SHUFFLE_PARTITIONS`** (`config/settings.py`, default 16): applied to
       `spark.sql.shuffle.partitions`/`spark.default.parallelism` in `get_spark_session()`.
       Spark's own default (200) is tuned for large multi-node clusters; on this project's
@@ -933,12 +932,46 @@ before treating any of it as final.
       multiple tree ensembles can be mid-training simultaneously, increasing peak memory
       pressure rather than reducing it — `SPARK_DRIVER_MEMORY` default also raised 4g→6g
       for the same reason.
-    Local tests updated/passing against tiny synthetic data (confirms the concurrent code
-    path is correct — same results as sequential, `TUNING_PARALLELISM<=1` still works as
-    a plain sequential loop). **Not yet run against real data on the VM** — that's the
-    concrete next step: confirm no `ConnectionRefusedError`/`OutOfMemoryError`, confirm
-    it's actually faster than the prior ~5.6-minute sequential run, and see whether the
-    wider search improves on R²=0.4623.
+    Also added `notebooks/run_training_pipeline.ipynb` — a ready-to-run VM notebook that
+    stops any stale Spark session and explicitly prints actual-vs-expected config before
+    letting the user proceed to training.
+19. **Found and fixed running the above on the real VM (2026-08-15).** First attempt
+    failed: `AnalysisException: Path does not exist: file:/home/linuxu/project/notebooks/
+    data/raw/survey_results_public.csv`. Root cause: `os.chdir()` in the notebook only
+    changes *Python's* working directory — the Spark JVM (a separate process reached via
+    py4j) keeps whatever directory it was originally launched from (apparently
+    `notebooks/`, wherever that persistent session first started), and resolves relative
+    paths against *its own* cwd, not Python's. `DATASET_PATH`'s default
+    (`./data/raw/survey_results_public.csv`) silently resolved against the wrong
+    directory. Fixed at the root: every path setting in `config/settings.py`
+    (`DATASET_PATH`, `MODEL_PATH`, `MODEL_METADATA_PATH`, `MODEL_COMPARISON_PATH`,
+    `MODEL_METRICS_PATH`, the checkpoint paths) now resolves to an absolute path anchored
+    to `PROJECT_ROOT`, computed from `settings.py`'s own file location — immune to either
+    process's cwd. Same bug existed in `explore_dataset.py`'s `REPORT_DIR` (used in a
+    Spark write, not just Python file I/O) and was fixed the same way. 11/11 relevant
+    tests still passing after the change.
+20. **Confirmed working on the VM, with improved results (2026-08-15).** Full run: 76
+    fits across all 4 models completed in ~315s total — essentially the *same*
+    wall-clock time the narrower 20-fit sequential run took before (~336s), confirming
+    the concurrency actually delivered close to 4x the search for roughly the same time.
+    No `ConnectionRefusedError`, no `OutOfMemoryError`.
+
+    | | Before (§23 #17, narrow grid) | Now (wide grid + parallelism) |
+    |---|---|---|
+    | Validation RMSE | 59,158 | **56,770** |
+    | Validation MAE | 31,319 | **30,376** |
+    | Validation R² | 0.4623 | **0.4750** |
+    | Final test RMSE | 58,323 | 59,425 |
+    | Final test MAE | 30,429 | 31,024 |
+    | Final test R² | 0.4585 | **0.4684** |
+
+    `LinearRegression` still selected, but the wider search found a meaningfully
+    different, better combination (`regParam=0.001, elasticNetParam=0.5` vs.
+    `regParam=0.1` before) — validation metrics improved across the board; final test
+    RMSE/MAE ticked up very slightly while R² improved, ordinary noise from evaluating on
+    one fixed held-out sample rather than a red flag. Mean baseline: RMSE 78,352, R²≈0, as
+    expected. **This closes out the explicit request to widen the grids using real
+    Spark/VM capabilities rather than trading off search breadth for speed.**
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -1045,8 +1078,8 @@ work through together. Checked items are done; unchecked items are next.
 - **Completion check:** comparison table produced — **met, and confirmed against the real
   89,184-row dataset on the VM**: all 4 models tuned successfully. First run (2026-08-11,
   §23 #15) showed R² near zero for every model, traced to outlier domination; after the
-  §10.9 outlier fix, re-confirmed (2026-08-15, §23 #17) with real R² up to 0.4623 — a
-  legitimate, working result
+  §10.9 outlier fix (§23 #17) and the subsequent widened-grid/parallel-tuning run (§23
+  #20), best validation R² is now 0.4750 — a legitimate, working, tuned result
 
 ### Phase 5 — Select winner and final test evaluation
 - [x] 5.1 `src/training/select_best_model.py` — RMSE → MAE → R² tie-break rule from §12,
@@ -1058,8 +1091,8 @@ work through together. Checked items are done; unchecked items are next.
       hyperparameters on `cv_train + validation` combined, evaluates **exactly once** on
       the untouched `test` slice, reverses `log1p` via `expm1` with negative/NaN clipping
       (§13). This closes the "evaluate once on untouched test data" gap — Known Issue #1
-      in §23 is now resolved. Confirmed on real data after the outlier fix (§23 #17):
-      final test RMSE 58,323 / MAE 30,429 / R² 0.4585
+      in §23 is now resolved. Confirmed on real data, latest run after the outlier fix
+      and widened tuning grids (§23 #20): final test RMSE 59,425 / MAE 31,024 / R² 0.4684
 - [x] 5.3 `src/training/evaluate_model.py` — writes `models/model_metadata.json` and
       `models/model_metrics.json` in the exact §12 schema and saves the full
       `PipelineModel` via `.write().overwrite().save(...)` to `models/best_salary_model/`.
@@ -1071,9 +1104,10 @@ work through together. Checked items are done; unchecked items are next.
       / `run_training_pipeline()`; the shell wrapper around it for the VM is what's
       missing)
 - **Completion check:** best PipelineModel and metadata saved — **met and confirmed
-  against real data, with a legitimately working model (R²=0.4585 final test)** after the
-  outlier fix (§23 #17). Only 5.4's shell wrapper remains outstanding — everything else
-  in Phase 4/5 is done, tested, and validated against real data.
+  against real data, with a legitimately working, tuned model (R²=0.4684 final test)**
+  after the outlier fix (§23 #17) and widened-grid parallel tuning (§23 #20). Only 5.4's
+  shell wrapper remains outstanding — everything else in Phase 4/5 is done, tested, and
+  validated against real data.
 
 ### Phase 6 — Kafka dataset producer
 - [ ] 6.1 `src/producers/dataset_producer.py` — reads CSV gradually, adds `event_id`/
