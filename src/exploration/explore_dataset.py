@@ -25,7 +25,9 @@ from src.training.data_loader import load_raw_dataset
 
 logger = get_logger(__name__)
 
-REPORT_DIR = "data/processed"
+# Absolute, not relative to whatever the caller's (or the Spark JVM's - see
+# config/settings.py's PROJECT_ROOT comment) working directory happens to be.
+REPORT_DIR = os.path.join(settings.PROJECT_ROOT, "data", "processed")
 TARGET_CANDIDATE_COLUMNS = ["CompTotal", "Currency", "ConvertedCompYearly", "CompFreq"]
 
 

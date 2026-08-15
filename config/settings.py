@@ -6,6 +6,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# This file lives at <project_root>/config/settings.py, so its own location - not
+# whatever the current working directory happens to be - reliably anchors the project
+# root. This matters more than it sounds: found on the VM (2026-08-15) that a relative
+# DATASET_PATH resolved against the *Spark JVM's* working directory, not Python's -
+# os.chdir() in a notebook only changes the Python process's cwd, but the JVM (a
+# separate process reached via py4j) keeps whatever directory it was originally launched
+# from, so the two can silently disagree. Anchoring every path setting to this absolute
+# PROJECT_ROOT makes that mismatch impossible regardless of either process's cwd.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
@@ -13,6 +23,13 @@ def _env(name: str, default: str) -> str:
 
 def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
+
+
+def _env_path(name: str, default: str) -> str:
+    """Like `_env`, but relative values are resolved to an absolute path under
+    PROJECT_ROOT instead of being left relative to an unpredictable cwd."""
+    value = os.environ.get(name, default)
+    return value if os.path.isabs(value) else os.path.join(PROJECT_ROOT, value)
 
 # VM install locations (used by scripts/*.sh, not by Python directly)
 KAFKA_HOME = _env("KAFKA_HOME", "/path/to/kafka")
@@ -57,17 +74,18 @@ SPARK_SHUFFLE_PARTITIONS = _env_int("SPARK_SHUFFLE_PARTITIONS", 16)
 # recurs.
 TUNING_PARALLELISM = _env_int("TUNING_PARALLELISM", 4)
 
-# Paths (relative to the repo root unless overridden)
-DATASET_PATH = _env("DATASET_PATH", "./data/raw/survey_results_public.csv")
-MODEL_PATH = _env("MODEL_PATH", "./models/best_salary_model")
-MODEL_METADATA_PATH = _env("MODEL_METADATA_PATH", "./models/model_metadata.json")
-MODEL_COMPARISON_PATH = _env("MODEL_COMPARISON_PATH", "./models/model_comparison.csv")
-MODEL_METRICS_PATH = _env("MODEL_METRICS_PATH", "./models/model_metrics.json")
+# Paths - resolved to absolute paths under PROJECT_ROOT (see _env_path above) so they're
+# correct regardless of the calling process's (or the Spark JVM's) working directory.
+DATASET_PATH = _env_path("DATASET_PATH", "./data/raw/survey_results_public.csv")
+MODEL_PATH = _env_path("MODEL_PATH", "./models/best_salary_model")
+MODEL_METADATA_PATH = _env_path("MODEL_METADATA_PATH", "./models/model_metadata.json")
+MODEL_COMPARISON_PATH = _env_path("MODEL_COMPARISON_PATH", "./models/model_comparison.csv")
+MODEL_METRICS_PATH = _env_path("MODEL_METRICS_PATH", "./models/model_metrics.json")
 
-PREDICTION_CHECKPOINT_PATH = _env(
+PREDICTION_CHECKPOINT_PATH = _env_path(
     "PREDICTION_CHECKPOINT_PATH", "./checkpoints/salary_predictions"
 )
-ANALYTICS_CHECKPOINT_PATH = _env(
+ANALYTICS_CHECKPOINT_PATH = _env_path(
     "ANALYTICS_CHECKPOINT_PATH", "./checkpoints/developer_events"
 )
 
