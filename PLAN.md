@@ -643,11 +643,32 @@ launch, not via `.config()` afterward — `notebooks/run_prediction_stream.ipynb
 documents the working launch command). **Confirmed end-to-end**: a real request got a
 real prediction (`$82,046.35`), an invalid one correctly landed on the dead-letter topic.
 
+**Phase 7 re-confirmed independently (2026-08-18)**, via a fresh run through
+`notebooks/run_prediction_stream.ipynb` on the VM using `scripts/start_kafka_jupyter.sh`
+— a different request landed a real prediction (`$82,046.35` again, different
+`request_id`) and the dead-letter path reproduced cleanly, confirming the launch method
+from §23 #22 is reliably repeatable, not a one-off.
+
+**Phase 6 dataset producer written (2026-08-18, not yet VM-verified).**
+`src/producers/dataset_producer.py` (§24 Phase 6.1) replays the survey CSV onto
+`developer_events` — deliberately plain Python (no Spark), reading row-by-row via `csv.
+DictReader` so memory use stays flat, publishing via `confluent_kafka.Producer` with
+retries/delivery logging/graceful shutdown per §14, plus an optional `limit` (row cap) for
+bounded demo runs. `scripts/start_dataset_producer.sh` (Phase 6.2) wraps it with
+`--file`/`--topic`/`--delay`/`--limit` CLI args, but since this VM can't run arbitrary
+Python scripts from a terminal directly, `notebooks/run_dataset_producer.ipynb` (Phase
+6.3) is the actual way this gets exercised — publishes a bounded batch and verifies it via
+a plain `confluent_kafka.Consumer` read (no Spark/Kafka-connector-JAR launch needed, since
+neither side of this notebook touches Spark). Still needs: an actual run on the VM, and
+running `tests/test_dataset_producer.py` (needs `confluent_kafka` installed — not present
+in the local Windows dev environment used to write this).
+
 Next options, roughly in likely order of value:
+- Verify Phase 6 on the VM by running `notebooks/run_dataset_producer.ipynb` top to
+  bottom — closes out Phase 6 for real.
 - `src/streaming/analytics_stream.py` (§15/Phase 7.2) — the other half of Phase 7,
-  not started (windowed aggregates over `developer_events`).
-- `src/producers/dataset_producer.py` (Phase 6) — needed to actually feed
-  `developer_events` for the analytics stream to have something to consume.
+  not started (windowed aggregates over `developer_events`); now unblocked since Phase 6
+  gives it something to consume.
 - `scripts/start_prediction_stream.sh` / `scripts/train_and_select_model.sh` (§24
   Phases 5.4/7.3) — thin shell wrappers around already-working Python entry points.
 - Phase 8 (dashboard), Phase 9 (tests/docs) — not started at all yet.
@@ -1179,13 +1200,35 @@ work through together. Checked items are done; unchecked items are next.
   validated against real data.
 
 ### Phase 6 — Kafka dataset producer
-- [ ] 6.1 `src/producers/dataset_producer.py` — reads CSV gradually, adds `event_id`/
-      `event_time`, publishes to `developer_events` with configurable delay, retries +
-      delivery logging, graceful shutdown
-- [ ] 6.2 `scripts/start_dataset_producer.sh` (file/topic/delay CLI args)
-- [ ] 6.3 Verify with a console consumer (Lab3-style `kafka-console-consumer.sh
-      --topic developer_events --from-beginning`)
-- **Completion check:** events appear in `developer_events`
+- [x] 6.1 `src/producers/dataset_producer.py` (2026-08-18) — plain Python (no Spark),
+      reads the CSV gradually via `csv.DictReader` row-by-row (flat memory use regardless
+      of file size), selects `CANDIDATE_INPUT_FEATURES` + `ConvertedCompYearly`, adds
+      `event_id` (uuid4) + `event_time` (UTC ISO8601), publishes to `developer_events` via
+      `confluent_kafka.Producer` with `retries=5`/`acks=all` and a delivery-report
+      callback for per-message logging, SIGINT/SIGTERM graceful shutdown (finishes the
+      in-flight row, flushes, then stops). `YearsCodePro` and the target are coerced to
+      real numbers (or `null`) in Python rather than left as raw CSV strings, matching
+      `DEVELOPER_EVENT_SCHEMA`'s declared `DoubleType` fields exactly instead of relying on
+      Spark's `from_json` string-to-number coercion downstream. Pure `build_event()`
+      transformation logic unit-tested in `tests/test_dataset_producer.py` (not yet run —
+      `confluent_kafka` isn't installed in the local dev environment; needs `pip install -r
+      requirements.txt` or VM verification).
+- [x] 6.2 `scripts/start_dataset_producer.sh` (2026-08-18) — thin wrapper around
+      `python -m src.producers.dataset_producer "$@"`, forwarding `--file`/`--topic`/
+      `--delay`/`--limit` CLI args. **Not the primary way this gets run in practice**
+      (see below) — kept as the documented CLI entry point since the module itself has no
+      Spark dependency and works from a plain terminal in principle.
+- [x] 6.3 `notebooks/run_dataset_producer.ipynb` (2026-08-18) — the VM can't run
+      arbitrary Python scripts from a terminal directly (same constraint that led to
+      `run_prediction_stream.ipynb`), so this is the actual way Phase 6 gets exercised on
+      the VM. Publishes a bounded batch (`LIMIT=20` events by default — the full ~89K-row
+      CSV would take hours at any reasonable delay) and verifies them via a plain
+      `confluent_kafka.Consumer` read of `developer_events` (no Spark/Kafka-connector-JAR
+      launch needed for this notebook, unlike the prediction stream one, since neither the
+      producer nor this verification step touches Spark at all). Includes a commented-out
+      cell for a full, unbounded replay. **Not yet run on the VM.**
+- **Completion check:** events appear in `developer_events` — code complete, VM
+  verification (via the notebook) still pending
 
 ### Phase 7 — Prediction and analytics streams
 - [x] 7.1 `src/streaming/prediction_stream.py` (2026-08-15) — ports and fixes the
