@@ -114,16 +114,16 @@ def test_build_technology_counts_explodes_and_filters_unknown(spark):
     valid = _timestamped(
         spark,
         [
-            ("2026-08-18T10:00:01Z", "Python;SQL"),
-            ("2026-08-18T10:00:05Z", "Python"),
-            ("2026-08-18T10:00:05Z", "Unknown"),
+            ("2026-08-18T10:00:01Z", "Python;SQL", 100000.0),
+            ("2026-08-18T10:00:05Z", "Python", 140000.0),
+            ("2026-08-18T10:00:05Z", "Unknown", 999999.0),
         ],
-        ["event_timestamp", "LanguageHaveWorkedWith"],
+        ["event_timestamp", "LanguageHaveWorkedWith", "ConvertedCompYearly"],
     )
-    counts = {
-        row["technology"]: row["event_count"] for row in build_technology_counts(valid).collect()
-    }
+    rows = {row["technology"]: row for row in build_technology_counts(valid).collect()}
 
-    assert counts["Python"] == 2
-    assert counts["SQL"] == 1
-    assert "Unknown" not in counts
+    assert rows["Python"]["event_count"] == 2
+    assert rows["Python"]["avg_salary"] == 120000.0
+    assert rows["SQL"]["event_count"] == 1
+    assert rows["SQL"]["avg_salary"] == 100000.0
+    assert "Unknown" not in rows

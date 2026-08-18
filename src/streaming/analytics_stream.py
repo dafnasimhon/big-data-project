@@ -148,15 +148,20 @@ def build_salary_breakdown(valid: DataFrame) -> DataFrame:
 
 
 def build_technology_counts(valid: DataFrame) -> DataFrame:
-    """§15: "common technologies" - event count per technology, exploding the
-    `;`-separated `LanguageHaveWorkedWith` field."""
+    """§15: "common technologies" - event count *and* avg salary per technology,
+    exploding the `;`-separated `LanguageHaveWorkedWith` field. `avg_salary` was added
+    (2026-08-18) for the dashboard's "salary by ... language/technology" requirement
+    (§17) - same aggregation, just one more column, rather than a separate 4th query."""
     exploded = valid.withColumn(
         "technology", F.explode(F.split(F.col("LanguageHaveWorkedWith"), ";"))
     ).filter((F.col("technology") != "") & (F.col("technology") != "Unknown"))
     aggregated = (
         exploded.withWatermark("event_timestamp", WATERMARK_DELAY)
         .groupBy(F.window("event_timestamp", WINDOW_DURATION), F.col("technology"))
-        .agg(F.count(F.lit(1)).alias("event_count"))
+        .agg(
+            F.count(F.lit(1)).alias("event_count"),
+            F.avg("ConvertedCompYearly").alias("avg_salary"),
+        )
     )
     return aggregated.select(
         F.lit("technology_counts").alias("metric"),
@@ -164,6 +169,7 @@ def build_technology_counts(valid: DataFrame) -> DataFrame:
         F.col("window.end").cast("string").alias("window_end"),
         F.col("technology"),
         F.col("event_count"),
+        F.round(F.col("avg_salary"), 2).alias("avg_salary"),
     )
 
 

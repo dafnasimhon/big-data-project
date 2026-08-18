@@ -667,13 +667,16 @@ in the local Windows dev environment used to write this).
 now a live topic with real historical rows on it — Phase 7.2 (analytics) has something
 real to consume.
 
+**Phase 7.2 confirmed working end-to-end on the VM (2026-08-18).** All of Phase 7
+(prediction stream + analytics stream) is now built and confirmed against real Kafka —
+167 real aggregate records across all three metrics (§24 Phase 7.2 for the full numbers).
+
 Next options, roughly in likely order of value:
-- `src/streaming/analytics_stream.py` (§15/Phase 7.2) — the other half of Phase 7,
-  not started (windowed aggregates over `developer_events`: event counts, avg salary by
-  country/role/experience, common technologies). Now unblocked since Phase 6 gives it
-  something to consume; would need its own notebook (`notebooks/run_analytics_stream.
-  ipynb`, mirroring the other two) since it's a Spark job, same VM constraint as Phase 7.
-- Phase 8 (dashboard) — `src/dashboard/app.py`, not started at all.
+- Phase 8 (dashboard) — `src/dashboard/app.py`, not started at all. Would need to
+  reckon with the same "notebook, not a script" VM constraint as everything else here —
+  Streamlit normally runs via `streamlit run`, so this needs a plan for how that works on
+  this VM (e.g. `streamlit run --server.headless true` from a notebook cell via
+  `subprocess`, or tunneling a port) before writing the app itself.
 - Phase 9 (tests/docs) — remaining unit tests + polish, not started.
 - Terminal-only wrapper scripts (`scripts/start_prediction_stream.sh`, `scripts/
   train_and_select_model.sh`) are now de-prioritized: they'd invoke Python/Spark directly
@@ -1282,7 +1285,15 @@ work through together. Checked items are done; unchecked items are next.
       `notebooks/run_analytics_stream.ipynb` runs it against real Kafka, same
       Kafka-enabled-launch requirement as `run_prediction_stream.ipynb`, and documents
       running `run_dataset_producer.ipynb` concurrently to actually feed it events.
-      **Not yet run on the VM.**
+      **Confirmed end-to-end on the VM (2026-08-18)**: with the dataset producer run at
+      `LIMIT=90, DELAY_SECONDS=1` (90s of event-time span, comfortably past the 30s
+      window + 15s watermark), all three aggregates landed on `salary_analytics` — 167
+      total records: 77 `salary_breakdown`, 3 `event_counts` (30 events per closed
+      window), 87 `technology_counts`. First attempt (at the producer notebook's smaller
+      defaults, `LIMIT=20, DELAY_SECONDS=0.5` = only 10s of event-time span) correctly
+      produced 0 records — not a bug, just not enough event-time span for the watermark
+      to ever pass a window's end; documents the real timing tradeoff of short demo
+      windows for whoever runs this next.
 - [ ] 7.3 `scripts/start_prediction_stream.sh` (the CLI wrapper around
       `python -m src.streaming.prediction_stream`) — still not started. **Added instead
       (2026-08-15):** `scripts/start_kafka_jupyter.sh`, launching Jupyter through
@@ -1299,17 +1310,39 @@ work through together. Checked items are done; unchecked items are next.
       `salary_dead_letter` instead (reproduced twice) — see §23 #23 for the full
       request/response JSON
 - **Completion check:** Spark consumes and publishes valid results — **met and
-  confirmed against real Kafka**, both the happy path and the dead-letter path. Only
-  the analytics stream (§15, Phase 7.2) remains unstarted within this phase
+  confirmed against real Kafka** for both halves of this phase: the prediction stream
+  (happy path + dead-letter path) and the analytics stream (all three windowed
+  aggregates, 167 real records). All of Phase 7 is now done and VM-confirmed.
 
 ### Phase 8 — Dashboard
-- [ ] 8.1 `src/dashboard/app.py` — personal prediction page (§17): inputs for all
-      features, UUID per request, publish/await by `request_id`, timeout handling,
-      estimate disclaimer
-- [ ] 8.2 Descriptive analytics page: salary by country/experience/role/technology,
-      salary distribution, Kafka event count
-- [ ] 8.3 Run the dashboard end-to-end against the running stack
-- **Completion check:** end-to-end request returns a prediction
+- [x] 8.1 `src/dashboard/app.py` (2026-08-18) — personal prediction page: free-text
+      inputs for all `CANDIDATE_INPUT_FEATURES` (with real-example placeholders, not
+      dropdowns - documented reasoning in the module docstring: no reliable source of
+      exact category strings without querying the live dataset, and `StringIndexer(
+      handleInvalid="keep")`/`CountVectorizer` both tolerate unrecognized values
+      gracefully anyway), UUID per request, publishes to `salary_requests` and awaits
+      the matching `salary_predictions` response by `request_id` (fresh unique consumer
+      group per request, reading from `earliest` to avoid a subscribe-vs-publish race),
+      timeout handling (`DASHBOARD_PREDICTION_TIMEOUT_SECONDS`), estimate disclaimer.
+      Deliberately has no Spark dependency at all (plain `confluent_kafka`, like
+      `dataset_producer.py`) - it only talks to Kafka, doesn't run the model itself, so
+      `streamlit run` shouldn't hit the connector-JAR launch problem the streaming
+      notebooks have.
+- [x] 8.2 (2026-08-18) Descriptive analytics page: reads a snapshot of `salary_
+      analytics`, shows avg salary by country/role/experience-range and by technology
+      (`build_technology_counts()` in `analytics_stream.py` extended to also compute
+      `avg_salary`, not just `event_count`, specifically for this), a salary
+      "distribution" (histogram of per-segment averages, labeled as an approximation -
+      see module docstring), and total Kafka events processed. Manual "Refresh" button
+      re-reads the topic rather than continuously polling in the background.
+- [ ] 8.3 Run the dashboard end-to-end against the running stack — not yet run.
+      `scripts/start_dashboard.sh` wraps `streamlit run src/dashboard/app.py`; trying a
+      plain terminal launch first (unlike the other two scripts, this one has no Spark/
+      Kafka-connector dependency, so it may not hit the "can't run scripts directly on
+      this VM" wall at all) - falling back to a notebook (`subprocess.Popen`-based) only
+      if that doesn't work.
+- **Completion check:** end-to-end request returns a prediction — not yet verified on
+  the VM
 
 ### Phase 9 — Testing and documentation
 - [ ] 9.1 Remaining tests: `test_model_selection.py`, `test_prediction_flow.py`
