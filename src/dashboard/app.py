@@ -34,8 +34,18 @@ Design choices worth documenting:
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 import uuid
+
+# `streamlit run` adds this script's own directory to sys.path, not the project root
+# (the same behavior a plain `python src/dashboard/app.py` would have) - so `config` and
+# `src` can't be imported below without this, unlike modules invoked via `python -m ...`.
+# Every notebook in this project works around the equivalent issue with its own explicit
+# `sys.path.insert(0, PROJECT_ROOT)` cell; this is that same fix, inlined here since
+# there's no notebook cell to put it in.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import pandas as pd
 import streamlit as st
