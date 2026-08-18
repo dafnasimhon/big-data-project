@@ -488,21 +488,40 @@ Validation RMSE, Validation MAE, Validation R², Training Time) and
 8. Publish valid results to `salary_predictions`; invalid → `salary_dead_letter`.
 9. Use a checkpoint directory and graceful shutdown.
 
-## 17. Streamlit Dashboard
+## 17. Analytics & Model Validation Notebook (replaces the Streamlit Dashboard)
 
-**Personal prediction page:**
-- Inputs for all selected features; generate a UUID per request.
-- Publish profile to `salary_requests`; await matching `salary_predictions` by
-  `request_id`.
-- Display predicted salary, model name, processing time, timestamp.
-- Clear timeout/error messaging.
-- Disclaimer: result is a survey-based estimate, may differ from actual salaries.
+**Superseded (2026-08-18).** A Streamlit dashboard (`src/dashboard/app.py`) was built and
+briefly run on the VM per the original plan below, but was dropped after working through
+several environment issues one at a time (missing `streamlit` binary, a numpy/pandas ABI
+mismatch from `pip install`, a `sys.path` issue running a script by file path, then a
+real `to_json()` null-dropping bug once it was actually reading live data) - once running,
+the personal-prediction page also depends on `run_prediction_stream.ipynb` staying up in
+a separate tab, which is an extra moving part for a course project demo. Replaced by
+`notebooks/run_analytics_report.ipynb`, which covers the same two purposes without a
+persistent server process:
 
-**Descriptive analytics page:**
-- Salary by country, by years of professional experience, by developer role, by
-  language/technology.
-- Salary distribution.
-- Count of Kafka events processed.
+**Part A - descriptive analytics** (from `salary_analytics`, §15): salary by country, by
+years of professional experience, by developer role, by language/technology; salary
+distribution; count of Kafka events processed. Same content the dashboard's analytics
+page would have shown, now as matplotlib charts in notebook cells.
+
+**Part B - prediction vs. real salary**: rather than the dashboard's "type in a made-up
+profile and see a prediction" flow (no ground truth to check against), this takes real
+historical rows from `developer_events` - which carry the actual `ConvertedCompYearly`
+from the original survey - scores them directly with the trained `PipelineModel`, and
+plots predicted vs. real salary side by side. This answers a more useful question for a
+project writeup ("how good are the model's predictions on real data?") than the
+dashboard's personal-prediction page did, and doesn't need `run_prediction_stream.ipynb`
+running at all (it scores the model directly, not via the `salary_requests`/
+`salary_predictions` round trip).
+
+Original Streamlit plan, kept for reference:
+- ~~Personal prediction page: inputs for all selected features; generate a UUID per
+  request; publish profile to `salary_requests`; await matching `salary_predictions` by
+  `request_id`; display predicted salary, model name, processing time, timestamp; clear
+  timeout/error messaging; disclaimer.~~
+- ~~Descriptive analytics page: salary by country/experience/role/technology; salary
+  distribution; count of Kafka events processed.~~
 
 ## 18. VM Execution Environment (replaces Docker Compose)
 
@@ -1338,35 +1357,29 @@ work through together. Checked items are done; unchecked items are next.
   (happy path + dead-letter path) and the analytics stream (all three windowed
   aggregates, 167 real records). All of Phase 7 is now done and VM-confirmed.
 
-### Phase 8 — Dashboard
-- [x] 8.1 `src/dashboard/app.py` (2026-08-18) — personal prediction page: free-text
-      inputs for all `CANDIDATE_INPUT_FEATURES` (with real-example placeholders, not
-      dropdowns - documented reasoning in the module docstring: no reliable source of
-      exact category strings without querying the live dataset, and `StringIndexer(
-      handleInvalid="keep")`/`CountVectorizer` both tolerate unrecognized values
-      gracefully anyway), UUID per request, publishes to `salary_requests` and awaits
-      the matching `salary_predictions` response by `request_id` (fresh unique consumer
-      group per request, reading from `earliest` to avoid a subscribe-vs-publish race),
-      timeout handling (`DASHBOARD_PREDICTION_TIMEOUT_SECONDS`), estimate disclaimer.
-      Deliberately has no Spark dependency at all (plain `confluent_kafka`, like
-      `dataset_producer.py`) - it only talks to Kafka, doesn't run the model itself, so
-      `streamlit run` shouldn't hit the connector-JAR launch problem the streaming
-      notebooks have.
-- [x] 8.2 (2026-08-18) Descriptive analytics page: reads a snapshot of `salary_
-      analytics`, shows avg salary by country/role/experience-range and by technology
-      (`build_technology_counts()` in `analytics_stream.py` extended to also compute
-      `avg_salary`, not just `event_count`, specifically for this), a salary
-      "distribution" (histogram of per-segment averages, labeled as an approximation -
-      see module docstring), and total Kafka events processed. Manual "Refresh" button
-      re-reads the topic rather than continuously polling in the background.
-- [ ] 8.3 Run the dashboard end-to-end against the running stack — not yet run.
-      `scripts/start_dashboard.sh` wraps `streamlit run src/dashboard/app.py`; trying a
-      plain terminal launch first (unlike the other two scripts, this one has no Spark/
-      Kafka-connector dependency, so it may not hit the "can't run scripts directly on
-      this VM" wall at all) - falling back to a notebook (`subprocess.Popen`-based) only
-      if that doesn't work.
-- **Completion check:** end-to-end request returns a prediction — not yet verified on
-  the VM
+### Phase 8 — Analytics & Model Validation Notebook (replaces the Dashboard)
+- [x] ~~8.1 `src/dashboard/app.py` — personal prediction page~~ **Built, ran into a
+      string of environment issues on the VM (missing `streamlit` binary, a numpy/pandas
+      ABI mismatch, a `sys.path` bug, then a real `to_json()` null-dropping bug once it
+      hit live data - the last one is now fixed in `analytics_stream.py`/`spark_utils.py`
+      regardless), then dropped by request (2026-08-18) - deleted (`src/dashboard/`,
+      `scripts/start_dashboard.sh`, `streamlit` removed from `requirements.txt`).**
+- [x] ~~8.2 Descriptive analytics page~~ **Replaced by
+      `notebooks/run_analytics_report.ipynb` Part A** (2026-08-18): same content (avg
+      salary by country/role/experience/technology, salary distribution, total events
+      processed), as matplotlib charts read from a `salary_analytics` snapshot instead of
+      a live dashboard page.
+- [x] 8.3 (new, 2026-08-18) `notebooks/run_analytics_report.ipynb` Part B — **prediction
+      vs. real salary**: takes real historical rows from `developer_events` (which carry
+      the actual `ConvertedCompYearly`), scores them directly with the trained
+      `PipelineModel` (no Kafka round-trip through `salary_requests`/`salary_predictions`
+      needed - doesn't depend on `run_prediction_stream.ipynb` running), and plots
+      predicted vs. real salary with mean absolute/percentage error. Explicitly caveated
+      in the notebook as a sanity check on training-adjacent data, not a substitute for
+      `models/model_metrics.json`'s actual held-out test-set metrics.
+- **Completion check:** replaced the dashboard's "does a request return a prediction"
+  check with something that needed no live dashboard process at all - not yet run on the
+  VM.
 
 ### Phase 9 — Testing and documentation
 - [ ] 9.1 Remaining tests: `test_model_selection.py`, `test_prediction_flow.py`
