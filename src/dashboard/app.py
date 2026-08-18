@@ -145,12 +145,20 @@ def read_topic_snapshot(topic: str, poll_seconds: float = 5.0) -> list[dict]:
 
 
 def _weighted_avg(rows: list[dict], group_key: str, value_key: str = "avg_salary") -> dict[str, float]:
+    """`avg_salary` can genuinely be null on a `technology_counts` row (that technology
+    had events in the window, but none with a known salary) - `analytics_stream.py`
+    filters this case out of `salary_breakdown`, but not `technology_counts`, since doing
+    so there would also drop that technology's legitimate event count. Skipped here
+    rather than upstream so "technology popularity" callers of this same helper aren't
+    affected."""
     grouped: dict[str, list[dict]] = {}
     for row in rows:
-        grouped.setdefault(row[group_key], []).append(row)
+        if row[value_key] is not None:
+            grouped.setdefault(row[group_key], []).append(row)
     return {
         key: sum(r[value_key] * r["event_count"] for r in group) / sum(r["event_count"] for r in group)
         for key, group in grouped.items()
+        if group
     }
 
 

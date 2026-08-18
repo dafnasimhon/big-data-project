@@ -110,6 +110,29 @@ def test_build_salary_breakdown_averages_within_group(spark):
     assert result["event_count"] == 2
 
 
+def test_build_salary_breakdown_fills_null_country_and_role_with_unknown(spark):
+    valid = _timestamped(
+        spark,
+        [("2026-08-18T10:00:01Z", None, None, 4.0, 100000.0)],
+        ["event_timestamp", "Country", "DevType", "YearsCodePro", "ConvertedCompYearly"],
+    )
+    result = build_salary_breakdown(valid).first()
+
+    # Not None/absent - a null group key here would otherwise make to_kafka_rows()'s
+    # to_json() drop the "country"/"role" key from the JSON entirely (see spark_utils.py).
+    assert result["country"] == "Unknown"
+    assert result["role"] == "Unknown"
+
+
+def test_build_salary_breakdown_drops_groups_with_no_known_salary(spark):
+    valid = _timestamped(
+        spark,
+        [("2026-08-18T10:00:01Z", "Germany", "Developer", 4.0, None)],
+        ["event_timestamp", "Country", "DevType", "YearsCodePro", "ConvertedCompYearly"],
+    )
+    assert build_salary_breakdown(valid).count() == 0
+
+
 def test_build_technology_counts_explodes_and_filters_unknown(spark):
     valid = _timestamped(
         spark,

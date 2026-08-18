@@ -41,9 +41,17 @@ def safe_cast_double(column: Column) -> Column:
 def to_kafka_rows(df: DataFrame, key_col: str | None) -> DataFrame:
     """Wrap `df`'s columns into a single JSON `value`, keyed by `key_col` (or an
     unkeyed/null key if there isn't a natural one, e.g. for dead letters). Shared by
-    `src/streaming/prediction_stream.py` and `src/streaming/analytics_stream.py`."""
+    `src/streaming/prediction_stream.py` and `src/streaming/analytics_stream.py`.
+
+    `ignoreNullFields=False` overrides `to_json()`'s default of silently *omitting* any
+    null-valued column from the JSON entirely, rather than writing it as `null` - found
+    the hard way (2026-08-18): a null `Country` in `analytics_stream.py`'s output caused
+    `to_kafka_rows()` to drop the `"country"` key outright, which then `KeyError`'d any
+    consumer (the dashboard) expecting the key to always be present.
+    """
     key_expr = F.col(key_col).cast("string") if key_col else F.lit(None).cast("string")
-    return df.select(key_expr.alias("key"), F.to_json(F.struct(*df.columns)).alias("value"))
+    value_expr = F.to_json(F.struct(*df.columns), {"ignoreNullFields": "false"})
+    return df.select(key_expr.alias("key"), value_expr.alias("value"))
 
 
 def reverse_log1p_predictions(

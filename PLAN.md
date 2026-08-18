@@ -1073,6 +1073,30 @@ before treating any of it as final.
     `salary_dead_letter` with `error_reason: "missing or unparseable request_id"`
     (twice, reproducibly). **This closes §24 Phase 7.5 for real** (previously only
     verified in the notebook prototype).
+24. **Found and fixed running the dashboard on the VM (2026-08-18):
+    `to_json()` silently drops null-valued fields from the JSON entirely, instead of
+    writing `null`.** `KeyError: 'country'` in `src/dashboard/app.py`'s descriptive
+    analytics page, reading real `salary_breakdown` records off `salary_analytics`.
+    Root cause: some `developer_events` rows have a null `Country` (the source survey
+    row had it missing) or a null `ConvertedCompYearly`; `analytics_stream.py`'s
+    `build_salary_breakdown()` grouped those into a null-keyed row, and `to_kafka_rows()`
+    (`src/common/spark_utils.py`) called `F.to_json(F.struct(*df.columns))` with Spark's
+    default `ignoreNullFields=true` — which *omits* any null-valued key from the output
+    JSON rather than emitting `"country": null`. Any consumer (the dashboard) doing
+    `row["country"]` then hits a `KeyError`, not a null. Two-part fix: (1)
+    `to_kafka_rows()` now explicitly passes `{"ignoreNullFields": "false"}` to `to_json()`
+    so every selected column is always present as a key going forward, even when null;
+    (2) `build_salary_breakdown()` additionally `fillna("Unknown", ...)`s `Country`/
+    `DevType` before grouping (matching `prediction_stream.py`'s existing convention for
+    missing categorical fields) and drops groups where `avg_salary` is still null after
+    aggregation (no events in that group had a known salary) — a salary breakdown with no
+    known salary isn't meaningful to show. `technology_counts` deliberately does *not*
+    drop null-`avg_salary` rows the same way (would also drop that technology's real event
+    count), so the dashboard's `_weighted_avg()` helper skips null values defensively
+    instead — a boundary-appropriate check (parsing external Kafka data), not
+    speculative validation. Two new tests in `tests/test_analytics_stream.py` cover both
+    the "Unknown"-fill and the dropped-null-salary-group cases; not yet re-run locally
+    (see the local PySpark worker environment issue noted the same day) or on the VM.
 
 ## 24. Step-by-Step Execution Checklist
 

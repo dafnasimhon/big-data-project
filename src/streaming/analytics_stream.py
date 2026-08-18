@@ -120,8 +120,18 @@ def build_event_counts(valid: DataFrame) -> DataFrame:
 
 def build_salary_breakdown(valid: DataFrame) -> DataFrame:
     """§15: "avg salary by country/role/experience range", combined into one grouped
-    table (see module docstring for why)."""
-    enriched = add_experience_range(valid)
+    table (see module docstring for why).
+
+    `Country`/`DevType` are "Unknown"-filled before grouping (same pattern
+    `prediction_stream.py` uses for `salary_requests`) - without this, a null `Country`/
+    `DevType` groups events into a null-keyed row, and `to_kafka_rows()`'s `to_json()`
+    then *drops that key from the JSON entirely* (Spark's default null-handling), rather
+    than writing `null` - which breaks any consumer (e.g. the dashboard) that assumes the
+    key is always present. Rows where every event in the group had a missing salary
+    (`avg_salary` still null after aggregation) are dropped for the same reason - a
+    salary breakdown with no known salary isn't meaningful to show anyway.
+    """
+    enriched = add_experience_range(valid).fillna("Unknown", subset=["Country", "DevType"])
     aggregated = (
         enriched.withWatermark("event_timestamp", WATERMARK_DELAY)
         .groupBy(
@@ -134,6 +144,7 @@ def build_salary_breakdown(valid: DataFrame) -> DataFrame:
             F.avg("ConvertedCompYearly").alias("avg_salary"),
             F.count(F.lit(1)).alias("event_count"),
         )
+        .filter(F.col("avg_salary").isNotNull())
     )
     return aggregated.select(
         F.lit("salary_breakdown").alias("metric"),
