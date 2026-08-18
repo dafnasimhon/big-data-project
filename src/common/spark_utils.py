@@ -1,5 +1,7 @@
 """Small Spark DataFrame helpers shared across exploration/cleaning/training."""
 
+from __future__ import annotations
+
 from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
@@ -34,6 +36,14 @@ def safe_cast_double(column: Column) -> Column:
     return F.when(column.rlike(_NUMERIC_PATTERN), column.cast("double")).otherwise(
         F.lit(None).cast("double")
     )
+
+
+def to_kafka_rows(df: DataFrame, key_col: str | None) -> DataFrame:
+    """Wrap `df`'s columns into a single JSON `value`, keyed by `key_col` (or an
+    unkeyed/null key if there isn't a natural one, e.g. for dead letters). Shared by
+    `src/streaming/prediction_stream.py` and `src/streaming/analytics_stream.py`."""
+    key_expr = F.col(key_col).cast("string") if key_col else F.lit(None).cast("string")
+    return df.select(key_expr.alias("key"), F.to_json(F.struct(*df.columns)).alias("value"))
 
 
 def reverse_log1p_predictions(

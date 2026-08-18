@@ -7,11 +7,11 @@ from pyspark.ml.regression import LinearRegression
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
+from src.common.spark_utils import to_kafka_rows
 from src.streaming.prediction_stream import (
     build_predictions,
     parse_requests,
     split_valid_and_dead_letters,
-    to_kafka_rows,
 )
 from src.training.feature_pipeline import build_feature_stages
 

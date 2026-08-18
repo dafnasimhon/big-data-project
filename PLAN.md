@@ -663,15 +663,23 @@ neither side of this notebook touches Spark). Still needs: an actual run on the 
 running `tests/test_dataset_producer.py` (needs `confluent_kafka` installed — not present
 in the local Windows dev environment used to write this).
 
+**Phase 6 confirmed working end-to-end on the VM (2026-08-18).** `developer_events` is
+now a live topic with real historical rows on it — Phase 7.2 (analytics) has something
+real to consume.
+
 Next options, roughly in likely order of value:
-- Verify Phase 6 on the VM by running `notebooks/run_dataset_producer.ipynb` top to
-  bottom — closes out Phase 6 for real.
 - `src/streaming/analytics_stream.py` (§15/Phase 7.2) — the other half of Phase 7,
-  not started (windowed aggregates over `developer_events`); now unblocked since Phase 6
-  gives it something to consume.
-- `scripts/start_prediction_stream.sh` / `scripts/train_and_select_model.sh` (§24
-  Phases 5.4/7.3) — thin shell wrappers around already-working Python entry points.
-- Phase 8 (dashboard), Phase 9 (tests/docs) — not started at all yet.
+  not started (windowed aggregates over `developer_events`: event counts, avg salary by
+  country/role/experience, common technologies). Now unblocked since Phase 6 gives it
+  something to consume; would need its own notebook (`notebooks/run_analytics_stream.
+  ipynb`, mirroring the other two) since it's a Spark job, same VM constraint as Phase 7.
+- Phase 8 (dashboard) — `src/dashboard/app.py`, not started at all.
+- Phase 9 (tests/docs) — remaining unit tests + polish, not started.
+- Terminal-only wrapper scripts (`scripts/start_prediction_stream.sh`, `scripts/
+  train_and_select_model.sh`) are now de-prioritized: they'd invoke Python/Spark directly
+  from a VM terminal, the same thing that made `scripts/start_dataset_producer.sh`
+  unusable here — a notebook is the real entry point for anything Spark-related on this
+  VM, so these are unlikely to be worth building.
 
 Completed so far (investigation only, per the plan's own "begin with investigation and
 planning only" instruction):
@@ -1226,9 +1234,11 @@ work through together. Checked items are done; unchecked items are next.
       `confluent_kafka.Consumer` read of `developer_events` (no Spark/Kafka-connector-JAR
       launch needed for this notebook, unlike the prediction stream one, since neither the
       producer nor this verification step touches Spark at all). Includes a commented-out
-      cell for a full, unbounded replay. **Not yet run on the VM.**
-- **Completion check:** events appear in `developer_events` — code complete, VM
-  verification (via the notebook) still pending
+      cell for a full, unbounded replay. **Confirmed on the VM (2026-08-18)**: 40 real
+      events landed on `developer_events`, including real `ConvertedCompYearly` values
+      (e.g. `75010.0` for a German full-stack developer) straight from the source CSV —
+      confirming this replays actual historical rows, not synthetic/predicted data.
+- **Completion check:** events appear in `developer_events` — **met and confirmed**
 
 ### Phase 7 — Prediction and analytics streams
 - [x] 7.1 `src/streaming/prediction_stream.py` (2026-08-15) — ports and fixes the
@@ -1253,8 +1263,26 @@ work through together. Checked items are done; unchecked items are next.
       had to be found and fixed first (§23 #22 — the Kafka connector JAR can only be
       added at PySpark process launch, not via `.config()` on a running session;
       `notebooks/run_prediction_stream.ipynb` documents the fix)
-- [ ] 7.2 `src/streaming/analytics_stream.py` — not started (no `developer_events`
-      producer or aggregation logic exists yet)
+- [x] 7.2 `src/streaming/analytics_stream.py` (2026-08-18) — reads `developer_events`,
+      routes malformed records (missing/unparseable `event_id`/`event_time`) to
+      `salary_dead_letter`, and publishes three windowed aggregates to
+      `salary_analytics`, tagged by a `metric` field: `event_counts` (total events per
+      30s window), `salary_breakdown` (avg salary + count per window/country/role/
+      experience-range, combining §15's separate "avg salary by X" bullets into one
+      grouped table rather than one aggregation per dimension), and `technology_counts`
+      (per-technology counts, exploding `;`-separated `LanguageHaveWorkedWith`). Uses a
+      short 30s window / 15s watermark (vs. a more realistic multi-minute production
+      window) so results actually appear within a VM demo's timeframe. `to_kafka_rows()`
+      was pulled out of `prediction_stream.py` into `src/common/spark_utils.py` so both
+      streaming modules share it instead of duplicating it. Pure transformation logic
+      (`parse_events`, `split_valid_and_dead_letters`, `add_experience_range`, the three
+      `build_*` aggregate functions) unit-tested in `tests/test_analytics_stream.py`
+      against batch DataFrames (windowed `groupBy` works identically in batch — only
+      `withWatermark` is streaming-only, and it's a no-op in batch mode).
+      `notebooks/run_analytics_stream.ipynb` runs it against real Kafka, same
+      Kafka-enabled-launch requirement as `run_prediction_stream.ipynb`, and documents
+      running `run_dataset_producer.ipynb` concurrently to actually feed it events.
+      **Not yet run on the VM.**
 - [ ] 7.3 `scripts/start_prediction_stream.sh` (the CLI wrapper around
       `python -m src.streaming.prediction_stream`) — still not started. **Added instead
       (2026-08-15):** `scripts/start_kafka_jupyter.sh`, launching Jupyter through

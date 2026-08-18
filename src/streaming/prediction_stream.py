@@ -46,7 +46,7 @@ from src.common.feature_config import MULTI_VALUE_COLUMNS, SINGLE_VALUE_CATEGORI
 from src.common.logging_config import get_logger
 from src.common.schemas import SALARY_REQUEST_SCHEMA
 from src.common.spark_session import get_spark_session
-from src.common.spark_utils import reverse_log1p_predictions
+from src.common.spark_utils import reverse_log1p_predictions, to_kafka_rows
 
 logger = get_logger(__name__)
 
@@ -107,13 +107,6 @@ def build_predictions(
         F.date_format(F.current_timestamp(), "yyyy-MM-dd'T'HH:mm:ss'Z'").alias("processed_at"),
         F.lit("success").alias("status"),
     )
-
-
-def to_kafka_rows(df: DataFrame, key_col: str | None) -> DataFrame:
-    """Wrap `df`'s columns into a single JSON `value`, keyed by `key_col` (or an
-    unkeyed/null key if there isn't a natural one, e.g. for dead letters)."""
-    key_expr = F.col(key_col).cast("string") if key_col else F.lit(None).cast("string")
-    return df.select(key_expr.alias("key"), F.to_json(F.struct(*df.columns)).alias("value"))
 
 
 def build_streams(spark: SparkSession) -> tuple[StreamingQuery, StreamingQuery]:
