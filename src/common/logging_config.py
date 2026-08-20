@@ -1,4 +1,3 @@
-"""Shared logging setup (PLAN.md rule 8)."""
 
 import logging
 import sys

@@ -63,8 +63,6 @@ def test_tune_candidate_runs_end_to_end(spark):
     df = _synthetic_dataset(spark, n=30)
     cv_train_df, validation_df, _test_df = split_dataset(df, seed=42)
 
-    # Single-combo grid keeps this fast: CrossValidator still runs its 3 folds for real,
-    # just without a hyperparameter search space to multiply that by.
     regressor = LinearRegression(featuresCol="features", labelCol="log_label", predictionCol="log_prediction")
     candidate = ModelCandidate("LinearRegression", regressor, ParamGridBuilder().build())
 

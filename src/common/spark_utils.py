@@ -10,17 +10,6 @@ _MISSING_TEXT_VALUES = {"", "NA"}
 
 
 def is_missing_text(column: Column) -> Column:
-    """True for null, blank/whitespace-only, or this dataset's literal "NA" placeholder.
-
-    The Stack Overflow survey CSV encodes missing values as the literal 2-character
-    string "NA" (confirmed by inspection — Spark's CSV reader has no built-in null-value
-    marker for it, `nullValue` defaults to "", not "NA"), not as SQL null or blank string.
-    Checking only `isNull()`/blank-string missed this entirely — confirmed on the real VM
-    run (2026-08-11): the exploration report claimed 0 missing target values out of
-    89,184 rows, when the actual figure (via `safe_cast_double` on the target, which
-    happens to reject "NA" as non-numeric) is 41,165 missing. Any column-level
-    missing-value check must go through this helper, not a bare null/blank check.
-    """
     text_column = F.trim(column.cast("string"))
     return column.isNull() | text_column.isin(_MISSING_TEXT_VALUES)
 
@@ -39,18 +28,6 @@ def safe_cast_double(column: Column) -> Column:
 
 
 def to_kafka_rows(df: DataFrame, key_col: str | None) -> DataFrame:
-    """Wrap `df`'s columns into a single JSON `value`, keyed by `key_col` (or an
-    unkeyed/null key if there isn't a natural one, e.g. for dead letters). Used by
-    `src/streaming/prediction_stream.py`.
-
-    `ignoreNullFields=False` overrides `to_json()`'s default of silently *omitting* any
-    null-valued column from the JSON entirely, rather than writing it as `null` - found
-    the hard way (2026-08-18, in the since-removed `analytics_stream.py`): a null
-    `Country` caused `to_kafka_rows()` to drop the `"country"` key outright, which then
-    `KeyError`'d any consumer (the also-since-removed dashboard) expecting the key to
-    always be present. Left in place since the same risk applies to any future producer
-    of nullable fields through this helper.
-    """
     key_expr = F.col(key_col).cast("string") if key_col else F.lit(None).cast("string")
     value_expr = F.to_json(F.struct(*df.columns), {"ignoreNullFields": "false"})
     return df.select(key_expr.alias("key"), value_expr.alias("value"))
@@ -59,14 +36,6 @@ def to_kafka_rows(df: DataFrame, key_col: str | None) -> DataFrame:
 def reverse_log1p_predictions(
     df: DataFrame, log_prediction_col: str = "log_prediction", output_col: str = "prediction"
 ) -> DataFrame:
-    """Reverse a log1p target transform (`expm1`) and clip degenerate results.
-
-    PLAN.md §13: "Reject any pipeline producing NaN/infinite/negative final predictions
-    without controlled post-processing" — null/NaN/negative results are clipped to 0.0
-    rather than propagated. Truly infinite `expm1` output would require `log_prediction`
-    beyond ~709 (double overflow), which isn't reachable from a regressor trained on this
-    feature set, so it isn't explicitly guarded here.
-    """
     reversed_column = F.expm1(F.col(log_prediction_col))
     safe_column = F.when(
         F.col(log_prediction_col).isNull() | F.isnan(reversed_column) | (reversed_column < 0),

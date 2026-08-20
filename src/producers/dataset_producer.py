@@ -1,23 +1,3 @@
-"""Kafka producer for `developer_events` (PLAN.md §14).
-
-Replays the survey CSV row-by-row onto `developer_events`, at a configurable delay, to
-simulate a live feed of incoming developer profiles rather than a static batch file.
-Downstream, `notebooks/run_prediction_stream.ipynb`'s Section 8 reads these events back
-(they carry the real `ConvertedCompYearly` from the source row) to compare the trained
-model's predictions against real salaries. (An earlier windowed-aggregation consumer,
-`src/streaming/analytics_stream.py`/Phase 7.2, was built, confirmed working, and then
-dropped by decision on 2026-08-20 - this producer is unaffected either way.)
-
-Deliberately plain Python, not Spark: reads the CSV with the standard library's `csv`
-module, one row at a time, so memory use stays flat regardless of file size, and uses a
-lightweight `confluent_kafka.Producer` - the same pattern already proven in
-`notebooks/run_prediction_stream.ipynb`'s test-request publisher and Lab3's own producers.
-
-Run with:
-
-    python -m src.producers.dataset_producer
-    python -m src.producers.dataset_producer --file path/to.csv --topic developer_events --delay 0.5
-"""
 
 from __future__ import annotations
 
@@ -41,14 +21,10 @@ _MISSING_TEXT_VALUES = {"", "NA"}
 
 
 def _is_missing(value: str | None) -> bool:
-    """Same "NA"-as-missing-sentinel rule as `src/common/spark_utils.py: is_missing_text`,
-    reimplemented in plain Python since this module deliberately has no Spark dependency."""
     return value is None or value.strip() in _MISSING_TEXT_VALUES
 
 
 def _parse_years_code_pro(value: str | None) -> float | None:
-    """Mirrors `data_cleaning.convert_years_code_pro`'s mapping so events carry the same
-    numeric meaning the training pipeline gives this field, without importing Spark here."""
     if _is_missing(value):
         return None
     if value == "Less than 1 year":
@@ -71,12 +47,6 @@ def _parse_numeric(value: str | None) -> float | None:
 
 
 def build_event(row: dict) -> dict:
-    """Selects the relevant fields from one raw CSV row and adds `event_id`/`event_time`
-    (PLAN.md §14). Numeric fields (`YearsCodePro`, target) are coerced to real numbers (or
-    null) here rather than left as raw CSV strings, so the resulting JSON matches
-    `src/common/schemas.py: DEVELOPER_EVENT_SCHEMA`'s declared types exactly - this doesn't
-    depend on Spark's `from_json` string-to-number coercion behavior downstream.
-    """
     event = {
         "event_id": str(uuid.uuid4()),
         "event_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -107,14 +77,6 @@ def stream_dataset(
     bootstrap_servers: str | None = None,
     limit: int | None = None,
 ) -> int:
-    """Reads `csv_path` gradually and publishes one event per row to `topic`, waiting
-    `delay_seconds` between events. Returns the number of events published. Stops early,
-    gracefully, on SIGINT/SIGTERM (finishes the in-flight row, flushes, then returns).
-
-    `limit`, if given, stops after publishing that many events - the full survey CSV
-    (~89K rows) at any reasonable demo delay would take hours to replay in full, so a
-    bounded run is the practical way to demo this interactively (e.g. from a notebook).
-    """
     producer = Producer(
         {
             "bootstrap.servers": bootstrap_servers or settings.KAFKA_BOOTSTRAP_SERVERS,

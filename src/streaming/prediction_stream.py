@@ -1,35 +1,3 @@
-"""Real-time salary prediction stream (PLAN.md §16).
-
-Reads `salary_requests` from Kafka, applies the saved `models/best_salary_model`
-`PipelineModel`, reverses the log1p target transform, and publishes predictions to
-`salary_predictions`. Requests missing a `request_id` (the one field the dashboard is
-guaranteed to always send, per §17 - "generate a UUID per request") go to
-`salary_dead_letter` instead of being force-predicted on.
-
-Run with:
-
-    python -m src.streaming.prediction_stream
-
-Ported from `notebooks/04_Spark_Streaming_Prediction.ipynb` (PLAN.md §23), which proved
-the mechanics work end-to-end on the VM but had gaps this version fixes:
-  - Its request schema (`LanguageCount`/`DatabaseCount`/`PlatformCount` scalar counts,
-    `Employment` as a plain single string) matched the notebook's own superseded feature
-    design, not the model this repo actually trains now —
-    `src/training/feature_pipeline.py` expects raw `LanguageHaveWorkedWith`/
-    `DatabaseHaveWorkedWith`/`PlatformHaveWorkedWith` strings and treats `Employment` as
-    multi-value too (§23 Known Issue #14, the real-data Employment-cardinality fix).
-    This version uses `src/common/schemas.py: SALARY_REQUEST_SCHEMA`, which already
-    matches `CANDIDATE_INPUT_FEATURES` - the same columns the trained pipeline expects.
-  - Hardcoded `localhost:9092` and a Spark-generated temp checkpoint directory -> both
-    now come from `config/settings.py`, consistent with the rest of the project.
-  - No dead-letter handling for malformed/incomplete requests (§16 step 8) -> added.
-  - `model_name`/`model_version` were hardcoded strings -> now read from the actual
-    saved `model_metadata.json` (`selected_model`, `trained_at`), so this doesn't go
-    stale the next time a different model wins.
-  - Non-required fields (anything but `request_id`) missing from a request are
-    `'Unknown'`-filled the same way training data handles missing values (§10.6),
-    rather than being silently dropped or crashing `RegexTokenizer` on a null input.
-"""
 
 from __future__ import annotations
 
@@ -59,7 +27,6 @@ def load_model_metadata(path: str | None = None) -> dict:
 
 
 def parse_requests(raw_stream: DataFrame) -> DataFrame:
-    """§16 step 3: parse Kafka records against the explicit request schema."""
     return (
         raw_stream.select(
             F.col("value").cast("string").alias("raw_value"),
@@ -71,13 +38,6 @@ def parse_requests(raw_stream: DataFrame) -> DataFrame:
 
 
 def split_valid_and_dead_letters(parsed: DataFrame) -> tuple[DataFrame, DataFrame]:
-    """§16 step 4: validate required fields, preserve `request_id`.
-
-    `request_id` is the only field treated as strictly required (missing/unparseable ->
-    dead letter). Every other feature field is `'Unknown'`-filled if missing, mirroring
-    how `data_cleaning.py` step 6 handles missing training data, rather than rejecting an
-    otherwise-usable request or crashing `RegexTokenizer` on a null string column.
-    """
     valid = parsed.filter(F.col("request_id").isNotNull())
     valid = valid.fillna("Unknown", subset=STRING_FEATURE_COLUMNS)
     valid = valid.withColumnRenamed("YearsCodePro", "YearsCodeProNumeric")
@@ -94,7 +54,6 @@ def split_valid_and_dead_letters(parsed: DataFrame) -> tuple[DataFrame, DataFram
 def build_predictions(
     valid_requests: DataFrame, model: PipelineModel, model_name: str, model_version: str
 ) -> DataFrame:
-    """§16 steps 5-7: apply the fitted pipeline, reverse log1p, build the response."""
     scored = model.transform(valid_requests)
     scored = reverse_log1p_predictions(scored, log_prediction_col="log_prediction", output_col="prediction")
 
@@ -110,12 +69,6 @@ def build_predictions(
 
 
 def build_streams(spark: SparkSession) -> tuple[StreamingQuery, StreamingQuery]:
-    """Builds and starts both streaming queries (predictions + dead letters) and
-    returns them immediately, without blocking. Shared by the blocking CLI entry point
-    (`run_prediction_stream`, below) and interactive/notebook use, where the caller
-    wants to start the streams, do other things (publish test requests, inspect
-    results), and explicitly `.stop()` them when done rather than block forever.
-    """
     metadata = load_model_metadata()
     model = PipelineModel.load(settings.MODEL_PATH)
 
@@ -166,7 +119,6 @@ def build_streams(spark: SparkSession) -> tuple[StreamingQuery, StreamingQuery]:
 
 
 def run_prediction_stream() -> None:
-    """Blocking CLI entry point: `python -m src.streaming.prediction_stream`."""
     spark = get_spark_session(app_name="SalaryPredictionStream", with_kafka=True)
     prediction_query, dead_letter_query = build_streams(spark)
     logger.info("Ctrl+C to stop.")

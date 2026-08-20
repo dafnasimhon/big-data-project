@@ -1,14 +1,3 @@
-"""Writes the PLAN.md §12 output artifacts and orchestrates the full Phase 4/5 run.
-
-Run with:
-
-    python -m src.training.evaluate_model
-
-Produces `models/model_comparison.csv`, `models/model_metadata.json`,
-`models/model_metrics.json`, and the saved winning `PipelineModel` at
-`models/best_salary_model/` — all at the exact paths PLAN.md §12/§19 specify (unlike the
-notebook prototype's ad hoc `output/` folders, §23 Known Issue #5).
-"""
 
 from __future__ import annotations
 

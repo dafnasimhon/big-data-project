@@ -1,4 +1,3 @@
-"""Explicit Spark schemas for Kafka messages and structured data (PLAN.md rule 6, §8)."""
 
 from pyspark.sql.types import (
     DoubleType,

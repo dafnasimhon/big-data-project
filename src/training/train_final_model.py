@@ -1,13 +1,3 @@
-"""Refit the selected winner and evaluate it ONCE on the untouched test set (PLAN.md §12).
-
-This is the other half of the §23 Known Issue #1 fix: `tune_models.py`/
-`select_best_model.py` never look at `test_df`, so by the time this module runs, the
-winning model type + hyperparameters were chosen entirely from `cv_train_df` and
-`validation_df`. Refitting on `cv_train_df + validation_df` (all non-test data) before the
-single test evaluation is standard practice — more training data for the model that's
-actually being shipped, without ever letting the test set influence which model or which
-hyperparameters were chosen.
-"""
 
 from __future__ import annotations
 
@@ -36,7 +26,6 @@ _REGRESSOR_CLASSES = {
 
 
 def build_regressor(model_name: str, best_params: dict, seed: int | None = None):
-    """A fresh regressor instance of `model_name`, with `best_params` applied."""
     if model_name not in _REGRESSOR_CLASSES:
         raise ValueError(f"Unknown model_name '{model_name}'; expected one of {sorted(_REGRESSOR_CLASSES)}")
 
@@ -59,8 +48,6 @@ def train_final_model(
     validation_df: DataFrame,
     test_df: DataFrame,
 ) -> tuple[PipelineModel, dict]:
-    """Refit `model_name` (with `best_params`) on cv_train+validation, evaluate once on
-    `test_df`. Returns (fitted PipelineModel, {"rmse":, "mae":, "r2":})."""
     train_val_df = cv_train_df.unionByName(validation_df)
 
     regressor = build_regressor(model_name, best_params)

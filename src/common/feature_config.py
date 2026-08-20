@@ -31,18 +31,6 @@ SINGLE_VALUE_CATEGORICAL_COLUMNS = [
     "Industry",
 ]
 
-# `;`-separated multi-select fields, handled via RegexTokenizer + CountVectorizer in
-# feature_pipeline.py rather than StringIndexer + OneHotEncoder. `Employment` moved here
-# (2026-08-11) after a real OutOfMemoryError training RandomForestRegressor on the VM:
-# it was originally in SINGLE_VALUE_CATEGORICAL_COLUMNS, but it's actually a multi-select
-# field like "Employed, full-time;Student, part-time" — treating each unique COMBINATION
-# as its own opaque one-hot category inflated it to ~107 columns (vs. the ~9 real
-# underlying statuses), which is both wasteful (most of that "cardinality" is redundant
-# combinations of the same handful of statuses) and a meaningfully large chunk of the
-# feature-vector width that was pushing RandomForestRegressor's split-finding out of
-# memory. Tokenizing it like the skill columns fixes both: far fewer dimensions, and each
-# one now means something (e.g. "is employed full-time" as its own boolean signal)
-# instead of an arbitrary combination id.
 MULTI_VALUE_COLUMNS = [
     "Employment",
     "LanguageHaveWorkedWith",

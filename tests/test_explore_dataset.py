@@ -14,9 +14,6 @@ def spark():
 
 
 def test_missing_value_summary_counts_na_string_as_missing(spark):
-    # Regression test for the bug found on the real VM run (2026-08-11): this dataset's
-    # missing-value sentinel is the literal string "NA", not null/blank. A naive
-    # isNull()-only check reported 0% missing on a column that's actually ~46% missing.
     df = spark.createDataFrame(
         [("USA",), ("NA",), ("Israel",), ("NA",)], ["Country"]
     )
@@ -25,8 +22,6 @@ def test_missing_value_summary_counts_na_string_as_missing(spark):
 
 
 def test_top_values_excludes_na_sentinel(spark):
-    # Regression test: seen on the real VM run (2026-08-11) — "NA" was showing up ranked
-    # among real database/platform choices instead of being excluded as missing data.
     df = spark.createDataFrame(
         [("PostgreSQL;MySQL",), ("NA",), ("PostgreSQL",), ("NA",)], ["DatabaseHaveWorkedWith"]
     )

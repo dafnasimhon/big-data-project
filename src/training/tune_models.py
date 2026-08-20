@@ -1,41 +1,3 @@
-"""Hyperparameter tuning + candidate comparison (PLAN.md §12), fixing §23 Known Issues #1/#2.
-
-For each of the 4 required candidates:
-  1. Wrap `feature_pipeline` stages + the regressor in one `Pipeline` (indexers/encoders/
-     imputer/vocab are fit fresh per candidate, inside the CV folds, so nothing leaks
-     across models or out of `cv_train_df` — PLAN.md rule 7).
-  2. Run k-fold cross-validation (§12: "CrossValidator or TrainValidationSplit on the
-     training portion") on `cv_train_df` only, tuning against log-space RMSE.
-  3. Evaluate the resulting best-per-model on `validation_df` — data the CV step never
-     saw — reporting real-scale (post-`expm1`) RMSE/MAE/R², since §13 requires metrics in
-     the original salary scale even though training targets `log_label`.
-
-`test_df` is never referenced here — it's reserved for `train_final_model.py`'s one-time
-final evaluation of the already-selected winner (§23 Known Issue #1 fix).
-
-**Why a hand-rolled k-fold loop instead of `pyspark.ml.tuning.CrossValidator`:** found
-running on the actual VM (2026-08-11) — `CrossValidator` fits each fold from a background
-thread (even at its default `parallelism=1`), and that thread needs its own fresh py4j
-socket connection back to the JVM gateway. In the Jupyter kernel environment this project
-was run in, that reconnection intermittently failed under load
-(`ConnectionRefusedError`, reproduced twice, including mid-`RandomForestRegressor`)
-while every same-thread Spark call worked reliably throughout. `cross_validate()` below
-does the identical fold-splitting/fit/evaluate/refit-on-all-data work as
-`CrossValidator`.
-
-**Concurrency (2026-08-15):** `TUNING_PARALLELISM` (`config/settings.py`, default 4) now
-controls how many (param combination, fold) fits run concurrently via background threads
-— deliberately reintroducing the class of risk described above, in order to use the VM's
-16 cores and cut wall-clock tuning time now that a reliable sequential baseline exists to
-fall back to. Each concurrent fit is wrapped with `pyspark.util.inheritable_thread_target`
-(the same mechanism `CrossValidator` itself uses internally) so JVM thread-local state is
-propagated correctly. **If `ConnectionRefusedError` recurs, set `TUNING_PARALLELISM=1`**
-— that reproduces the exact sequential behavior this module used before, which is proven
-reliable. `Pipeline`/regressor instances aren't mutated by concurrent `.fit()` calls
-(each call internally does `self.copy(params)._fit(dataset)`), and `stages_factory()`
-builds fresh, unshared stage instances per call, so concurrent fits don't share mutable
-state with each other.
-"""
 
 from __future__ import annotations
 
@@ -72,7 +34,6 @@ class TuningResult:
 
 
 def extract_best_params(pipeline_model, param_grid: list) -> dict:
-    """Pull just the grid-tuned hyperparameter values off the fitted regressor stage."""
     regressor_stage = pipeline_model.stages[-1]
     tuned_param_names = {param.name for combo in param_grid for param in combo}
     return {
@@ -82,9 +43,6 @@ def extract_best_params(pipeline_model, param_grid: list) -> dict:
 
 
 def evaluate_real_scale(predictions: DataFrame) -> tuple[float, float, float]:
-    """Reverse the log1p target transform and compute RMSE/MAE/R² in real salary units
-    (§13). Shared by both validation-time comparison (this module) and the one-time final
-    test evaluation (`train_final_model.py`)."""
     predictions = reverse_log1p_predictions(predictions)
     rmse = RegressionEvaluator(labelCol="label", predictionCol="prediction", metricName="rmse").evaluate(
         predictions
@@ -107,14 +65,6 @@ def cross_validate(
     seed: int = 42,
     parallelism: int | None = None,
 ):
-    """Hand-rolled equivalent of `pyspark.ml.tuning.CrossValidator` — see module
-    docstring for why this exists and how `parallelism` is used safely.
-    `stages_factory` is a zero-arg callable returning a fresh list of Pipeline stages
-    (feature stages + regressor) for each fit call.
-
-    Returns (best_model, best_params_map): `best_model` is fit on the *entire* `data`
-    using the best-found params (matching `CrossValidatorModel.bestModel`'s behavior).
-    """
     parallelism = settings.TUNING_PARALLELISM if parallelism is None else parallelism
 
     data = data.repartition(settings.SPARK_SHUFFLE_PARTITIONS)
@@ -206,7 +156,6 @@ def tune_candidate(candidate: ModelCandidate, cv_train_df: DataFrame, validation
 
 
 def evaluate_mean_baseline(cv_train_df: DataFrame, validation_df: DataFrame) -> dict:
-    """Naive mean-prediction baseline (§13), for comparison against every tuned model."""
     mean_label = cv_train_df.agg(F.avg("label")).first()[0]
     baseline_predictions = validation_df.withColumn("prediction", F.lit(mean_label))
 

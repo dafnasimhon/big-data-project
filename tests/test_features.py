@@ -70,11 +70,6 @@ def test_feature_pipeline_imputes_missing_years_code_pro(spark):
 
 
 def test_employment_is_tokenized_not_one_hot_indexed(spark):
-    # Regression test for the fix found via a real OutOfMemoryError on the VM
-    # (2026-08-11): Employment is a multi-select field ("Employed, full-time;Student,
-    # part-time"), not single-valued — it must go through the same RegexTokenizer +
-    # CountVectorizer path as the skill columns, not StringIndexer + OneHotEncoder
-    # (which would explode it into ~107 one-hot dimensions for real data).
     def _output_columns(stage):
         try:
             return list(stage.getOutputCols())
@@ -107,9 +102,6 @@ def test_feature_pipeline_splits_multi_select_employment(spark):
     )
     model = build_feature_pipeline().fit(df)
     transformed = model.transform(df)
-
-    # Just confirming it fits/transforms without error and produces a real feature vector
-    # for the multi-status row — the point is this no longer needs a ~107-wide one-hot.
     assert transformed.filter(transformed.features.isNull()).count() == 0
 
 
@@ -127,10 +119,6 @@ def test_feature_pipeline_handles_unseen_categories_at_transform_time(spark):
         ],
         FEATURE_COLUMNS,
     )
-
-    # handleInvalid="keep" (StringIndexer/OneHotEncoder/VectorAssembler) must not raise on
-    # categories never seen during fit — this is what makes the saved PipelineModel safe
-    # to apply to live streaming requests with values outside the training vocabulary.
     transformed = model.transform(unseen_row)
     assert transformed.count() == 1
     assert transformed.first()["features"] is not None

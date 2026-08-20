@@ -1,10 +1,7 @@
 # Real-Time Tech Salary Prediction
 
-A Spark + Kafka + Spark ML project that trains a salary-prediction model on the Stack
-Overflow Developer Survey 2023, then serves real-time predictions over Kafka.
+A Spark + Kafka + Spark ML project that trains a salary-prediction model on the Stack Overflow Developer Survey 2023, then serves real-time predictions over Kafka.
 
-For the full project plan, architecture rationale, and a detailed history of issues found
-and fixed during development, see [`PLAN.md`](PLAN.md).
 
 ## Architecture
 
@@ -17,9 +14,7 @@ and fixed during development, see [`PLAN.md`](PLAN.md).
   Streaming job that reads salary-prediction requests from `salary_requests`, applies the
   trained model, and publishes results to `salary_predictions` (invalid requests go to
   `salary_dead_letter`).
-- **Notebooks** (`notebooks/`) — this VM can't run Python/Spark scripts directly from a
-  terminal, so every part of this project is run through a Jupyter notebook instead. See
-  [Running the project](#running-the-project) below.
+- **Notebooks** (`notebooks/`) — every part of this project is run through a Jupyter notebook. 
 
 ## Prerequisites
 
@@ -38,8 +33,7 @@ and fixed during development, see [`PLAN.md`](PLAN.md).
    ```
 3. Copy `.env.example` to `.env` (every notebook does this automatically on first run if
    it's missing) and adjust any paths/settings for your machine.
-4. Make sure `data/raw/survey_results_public.csv` exists — extract it from `data.zip` if
-   you have it (`unzip data.zip survey_results_public.csv -d data/raw/`), or provide the
+4. Make sure `data/raw/survey_results_public.csv` exists —  or provide the
    Stack Overflow Developer Survey 2023 CSV yourself.
 
 ## Running Kafka on the VM
@@ -69,13 +63,6 @@ bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-fac
 pyspark --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.2
 ```
 
-Match the package version to whatever Spark version is actually installed
-(`spark-submit --version`). The Kafka connector JAR can only be attached at process
-launch — it can't be added to an already-running Spark session afterward, so this has to
-happen before Jupyter (or any notebook's `SparkSession`) starts. If the VM is already
-configured with this connector available by default, a plain `pyspark`/`jupyter notebook`
-launch works too, without the `--packages` flag.
-
 ## Running the project
 
 Everything runs through Jupyter notebooks, normally in this order:
@@ -92,7 +79,26 @@ Everything runs through Jupyter notebooks, normally in this order:
 
 ## Testing
 
+Run the full suite:
 ```bash
+pytest tests/
+```
+
+Run a single file (useful while iterating on one module):
+```bash
+pytest tests/test_cleaning.py -q
+```
+
+`tests/test_dataset_producer.py` needs `confluent_kafka` installed (`pip install -r
+requirements.txt` covers it) — it's skipped/fails to collect without it.
+
+**Troubleshooting:** if PySpark-based tests hang and then fail with
+`SocketTimeoutException: Timed out while waiting for the Python worker to connect back`,
+Spark's local worker process isn't starting correctly. Set these explicitly before
+running pytest:
+```bash
+export PYSPARK_PYTHON=$(python -c "import sys; print(sys.executable)")
+export SPARK_LOCAL_IP=127.0.0.1
 pytest tests/
 ```
 

@@ -22,7 +22,6 @@ def test_select_best_model_picks_lowest_rmse():
 
 
 def test_select_best_model_tie_breaks_on_mae():
-    # RMSEs differ by less than the relative tie tolerance -> treated as a tie.
     results = [_result("A", 100.0, 50.0, 0.5), _result("B", 100.00000005, 40.0, 0.4)]
     assert select_best_model(results).model_name == "B"
 

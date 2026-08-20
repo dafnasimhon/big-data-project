@@ -1,15 +1,3 @@
-"""Spark job producing the PLAN.md §9 dataset exploration / target-selection report.
-
-Ports and extends `notebooks/01_Data_Exploration.ipynb`'s ad hoc cell-by-cell checks into
-a single reusable job. Run with:
-
-    python -m src.exploration.explore_dataset
-
-Writes `data/processed/exploration_report.json` plus a `missing_values_summary` CSV, and
-stops with a RuntimeError (rather than silently proceeding) if the target candidate
-columns aren't where PLAN.md §2 expects them.
-"""
-
 import json
 import os
 

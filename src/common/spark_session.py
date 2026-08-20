@@ -1,4 +1,3 @@
-"""Builds the project's SparkSession from config/settings.py (PLAN.md rule 5)."""
 
 from __future__ import annotations
 
@@ -13,12 +12,6 @@ _KAFKA_PACKAGE = f"org.apache.spark:spark-sql-kafka-0-10_2.12:{pyspark.__version
 
 
 def get_spark_session(app_name: str | None = None, with_kafka: bool = False) -> SparkSession:
-    """Build (or fetch) the SparkSession for SPARK_MASTER_URL (local[*] or a standalone cluster).
-
-    Pass with_kafka=True for jobs that read/write Kafka via Structured Streaming
-    (src/streaming/*, src/producers/*); plain batch jobs (exploration, training) can
-    leave it False.
-    """
     builder = (
         SparkSession.builder.appName(app_name or settings.SPARK_APP_NAME)
         .master(settings.SPARK_MASTER_URL)
