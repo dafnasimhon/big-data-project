@@ -4,6 +4,5 @@ pyspark
 
 confluent-kafka
 python-dotenv
-pandas
 matplotlib
 pytest
