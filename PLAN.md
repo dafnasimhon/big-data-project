@@ -301,7 +301,7 @@ salary-prediction-big-data/
 | `salary_predictions`  | Prediction results produced by Spark.                        |
 | `developer_events`    | Rows streamed gradually from the dataset for the Big Data demo. |
 | `salary_dead_letter`  | Malformed or invalid events that cannot be processed.         |
-| `salary_analytics`    | Optional topic for real-time aggregate results.               |
+| `salary_analytics`    | **Unused (2026-08-20).** Was written to by `analytics_stream.py` (Phase 7.2), built, confirmed working end-to-end, then dropped by decision along with its dashboard/notebook consumers. May still exist as a topic on the VM from earlier testing; nothing produces or reads it anymore. |
 
 **Example request:**
 ```json
@@ -488,34 +488,47 @@ Validation RMSE, Validation MAE, Validation R², Training Time) and
 8. Publish valid results to `salary_predictions`; invalid → `salary_dead_letter`.
 9. Use a checkpoint directory and graceful shutdown.
 
-## 17. Analytics & Model Validation Notebook (replaces the Streamlit Dashboard)
+## 17. Dashboard / Analytics Report — dropped
 
-**Superseded (2026-08-18).** A Streamlit dashboard (`src/dashboard/app.py`) was built and
-briefly run on the VM per the original plan below, but was dropped after working through
-several environment issues one at a time (missing `streamlit` binary, a numpy/pandas ABI
-mismatch from `pip install`, a `sys.path` issue running a script by file path, then a
-real `to_json()` null-dropping bug once it was actually reading live data) - once running,
-the personal-prediction page also depends on `run_prediction_stream.ipynb` staying up in
-a separate tab, which is an extra moving part for a course project demo. Replaced by
-`notebooks/run_analytics_report.ipynb`, which covers the same two purposes without a
-persistent server process:
+**Dropped entirely (2026-08-20).** Two attempts at this phase were made and both were
+abandoned by explicit decision, not left unfinished for lack of trying:
 
-**Part A - descriptive analytics** (from `salary_analytics`, §15): salary by country, by
-years of professional experience, by developer role, by language/technology; salary
-distribution; count of Kafka events processed. Same content the dashboard's analytics
-page would have shown, now as matplotlib charts in notebook cells.
+1. A Streamlit dashboard (`src/dashboard/app.py`) was built and briefly run on the VM,
+   but hit a string of environment issues one at a time (missing `streamlit` binary, a
+   numpy/pandas ABI mismatch from `pip install`, a `sys.path` issue running a script by
+   file path, then a real `to_json()` null-dropping bug once it was actually reading live
+   data) - once running, its personal-prediction page also depended on
+   `run_prediction_stream.ipynb` staying up in a separate tab, an extra moving part for a
+   course project demo. Deleted (2026-08-18): `src/dashboard/`,
+   `scripts/start_dashboard.sh`, `streamlit` removed from `requirements.txt`.
+2. Replaced with `notebooks/run_analytics_report.ipynb` (descriptive charts from
+   `salary_analytics` + a real-vs-predicted-salary comparison using real historical
+   `developer_events` rows), which also hit its own numpy/matplotlib environment issues
+   on the VM. Deleted by explicit decision (2026-08-20), independent of whether those
+   issues were resolvable.
 
-**Part B - prediction vs. real salary**: rather than the dashboard's "type in a made-up
-profile and see a prediction" flow (no ground truth to check against), this takes real
-historical rows from `developer_events` - which carry the actual `ConvertedCompYearly`
-from the original survey - scores them directly with the trained `PipelineModel`, and
-plots predicted vs. real salary side by side. This answers a more useful question for a
-project writeup ("how good are the model's predictions on real data?") than the
-dashboard's personal-prediction page did, and doesn't need `run_prediction_stream.ipynb`
-running at all (it scores the model directly, not via the `salary_requests`/
-`salary_predictions` round trip).
+**Phase 7.2 (`src/streaming/analytics_stream.py`) was then also dropped entirely
+(2026-08-20)**, by explicit decision rather than left as orphaned code with no notebook
+able to launch it: `src/streaming/analytics_stream.py`,
+`notebooks/run_analytics_stream.ipynb`, and `tests/test_analytics_stream.py` all
+deleted; `KAFKA_ANALYTICS_TOPIC`/`ANALYTICS_CHECKPOINT_PATH` removed from
+`config/settings.py` and `.env.example` as dead config. It had been built and confirmed
+working end-to-end on the VM first (167 real aggregate records, §23 Known Issue list) -
+not abandoned mid-work.
 
-Original Streamlit plan, kept for reference:
+**What's left of "compare against real data" now lives in `run_prediction_stream.ipynb`
+Section 8**, added the same day: reads real historical `developer_events` rows (which
+carry the real `ConvertedCompYearly`), scores them directly with the trained model (no
+analytics stream or dashboard involved at all), and plots real vs. predicted salary.
+`matplotlib` is back in `requirements.txt` for this reason - not because the deleted
+report notebook needs it, but because this comparison does.
+
+**Phase 7.1 (`src/streaming/prediction_stream.py`) is unaffected and remains
+done/VM-confirmed** - it still publishes real predictions to `salary_predictions`, and
+its notebook now does double duty (live Kafka round-trip test + the real-vs-predicted
+comparison above).
+
+Original plan, kept for reference:
 - ~~Personal prediction page: inputs for all selected features; generate a UUID per
   request; publish profile to `salary_requests`; await matching `salary_predictions` by
   `request_id`; display predicted salary, model name, processing time, timestamp; clear
@@ -556,7 +569,6 @@ KAFKA_REQUEST_TOPIC=salary_requests
 KAFKA_PREDICTION_TOPIC=salary_predictions
 KAFKA_DATASET_TOPIC=developer_events
 KAFKA_DEAD_LETTER_TOPIC=salary_dead_letter
-KAFKA_ANALYTICS_TOPIC=salary_analytics
 
 SPARK_MASTER_URL=local[*]        # or spark://<host>:7077 if a standalone cluster is up
 SPARK_APP_NAME=TechSalaryPrediction
@@ -567,14 +579,12 @@ MODEL_METADATA_PATH=./models/model_metadata.json
 MODEL_COMPARISON_PATH=./models/model_comparison.csv
 
 PREDICTION_CHECKPOINT_PATH=./checkpoints/salary_predictions
-ANALYTICS_CHECKPOINT_PATH=./checkpoints/developer_events
 
 RANDOM_SEED=42
 TOP_LANGUAGES=20
 TOP_DATABASES=15
 TOP_PLATFORMS=15
 DATASET_EVENT_DELAY_SECONDS=2
-DASHBOARD_PREDICTION_TIMEOUT_SECONDS=30
 ```
 
 ## 20. Testing Requirements
@@ -683,20 +693,24 @@ running `tests/test_dataset_producer.py` (needs `confluent_kafka` installed — 
 in the local Windows dev environment used to write this).
 
 **Phase 6 confirmed working end-to-end on the VM (2026-08-18).** `developer_events` is
-now a live topic with real historical rows on it — Phase 7.2 (analytics) has something
-real to consume.
+now a live topic with real historical rows on it. `run_prediction_stream.ipynb` Section 8
+now depends on this directly (real-vs-predicted comparison), so this phase stays.
 
-**Phase 7.2 confirmed working end-to-end on the VM (2026-08-18).** All of Phase 7
-(prediction stream + analytics stream) is now built and confirmed against real Kafka —
-167 real aggregate records across all three metrics (§24 Phase 7.2 for the full numbers).
+**Phase 7.2 confirmed working end-to-end on the VM (2026-08-18), then dropped by
+decision (2026-08-20).** It was fully built and confirmed against real Kafka first (167
+real aggregate records across all three metrics), not abandoned mid-work — see §17 for
+the full story of why it (and Phase 8) were dropped afterward.
 
-Next options, roughly in likely order of value:
-- Phase 8 (dashboard) — `src/dashboard/app.py`, not started at all. Would need to
-  reckon with the same "notebook, not a script" VM constraint as everything else here —
-  Streamlit normally runs via `streamlit run`, so this needs a plan for how that works on
-  this VM (e.g. `streamlit run --server.headless true` from a notebook cell via
-  `subprocess`, or tunneling a port) before writing the app itself.
-- Phase 9 (tests/docs) — remaining unit tests + polish, not started.
+**Current status (2026-08-20): Phases 1-7.1 done and VM-confirmed. Phase 7.2 and Phase
+8 were both built, confirmed working, then explicitly dropped (§17). Phase 9 is what's
+actually left.**
+
+Next options:
+- Phase 9 (tests/docs) — remaining unit tests + `README.md` + PLAN.md polish, not
+  started. The only phase left that hasn't been at least attempted.
+- Re-run `run_training_pipeline.ipynb` on the VM to pick up the `MIN_PLAUSIBLE_SALARY`
+  fix (§23 Known Issue #25) — optional, since its effect on the training data is likely
+  tiny, but worth confirming metrics are still consistent.
 - Terminal-only wrapper scripts (`scripts/start_prediction_stream.sh`, `scripts/
   train_and_select_model.sh`) are now de-prioritized: they'd invoke Python/Spark directly
   from a VM terminal, the same thing that made `scripts/start_dataset_producer.sh`
@@ -1116,6 +1130,22 @@ before treating any of it as final.
     speculative validation. Two new tests in `tests/test_analytics_stream.py` cover both
     the "Unknown"-fill and the dropped-null-salary-group cases; not yet re-run locally
     (see the local PySpark worker environment issue noted the same day) or on the VM.
+25. **Found via real data, fixed: §10.9's outlier filter only guarded the high end
+    (2026-08-20).** `notebooks/run_prediction_stream.ipynb`'s new real-vs-predicted
+    comparison (§8 of that notebook) surfaced a real `developer_events` row with
+    `ConvertedCompYearly = $14` — step 7's `label > 0` check happily lets it through
+    since $14 is technically positive, and it threw off that comparison (predicted
+    salary `$1,988.68` vs. real `$14` = a 14,105% "error" that's actually a data
+    artifact, not a model failure). Fixed the same way `MAX_PLAUSIBLE_SALARY` already
+    handles the high end: new `MIN_PLAUSIBLE_SALARY` setting (default $1,000 - generous
+    enough to keep any conceivably real annual salary from even the lowest
+    cost-of-living countries in this global survey), and `data_cleaning.py`'s step 9
+    filter now checks both bounds. New regression test
+    (`test_clean_dataset_drops_implausibly_low_salaries`) mirrors the existing high-end
+    one, using the real $14 case. Not yet re-run locally (same PySpark environment issue
+    as #24) or on the VM - this changes `clean_dataset()`'s output, so
+    `run_training_pipeline.ipynb` should be re-run once this is confirmed working, to
+    pick up the (very slightly) cleaner training data.
 
 ## 24. Step-by-Step Execution Checklist
 
@@ -1267,11 +1297,11 @@ work through together. Checked items are done; unchecked items are next.
       transformation logic unit-tested in `tests/test_dataset_producer.py` (not yet run —
       `confluent_kafka` isn't installed in the local dev environment; needs `pip install -r
       requirements.txt` or VM verification).
-- [x] 6.2 `scripts/start_dataset_producer.sh` (2026-08-18) — thin wrapper around
-      `python -m src.producers.dataset_producer "$@"`, forwarding `--file`/`--topic`/
-      `--delay`/`--limit` CLI args. **Not the primary way this gets run in practice**
-      (see below) — kept as the documented CLI entry point since the module itself has no
-      Spark dependency and works from a plain terminal in principle.
+- [x] ~~6.2 `scripts/start_dataset_producer.sh`~~ Written (2026-08-18) as a thin
+      wrapper around `python -m src.producers.dataset_producer "$@"`, but never actually
+      the primary way this gets run (6.3 always was) and, in practice, never even ended
+      up committed to the repo - no longer present. `notebooks/run_dataset_producer.ipynb`
+      (6.3) is the one real entry point.
 - [x] 6.3 `notebooks/run_dataset_producer.ipynb` (2026-08-18) — the VM can't run
       arbitrary Python scripts from a terminal directly (same constraint that led to
       `run_prediction_stream.ipynb`), so this is the actual way Phase 6 gets exercised on
@@ -1309,39 +1339,29 @@ work through together. Checked items are done; unchecked items are next.
       had to be found and fixed first (§23 #22 — the Kafka connector JAR can only be
       added at PySpark process launch, not via `.config()` on a running session;
       `notebooks/run_prediction_stream.ipynb` documents the fix)
-- [x] 7.2 `src/streaming/analytics_stream.py` (2026-08-18) — reads `developer_events`,
-      routes malformed records (missing/unparseable `event_id`/`event_time`) to
-      `salary_dead_letter`, and publishes three windowed aggregates to
-      `salary_analytics`, tagged by a `metric` field: `event_counts` (total events per
-      30s window), `salary_breakdown` (avg salary + count per window/country/role/
-      experience-range, combining §15's separate "avg salary by X" bullets into one
-      grouped table rather than one aggregation per dimension), and `technology_counts`
-      (per-technology counts, exploding `;`-separated `LanguageHaveWorkedWith`). Uses a
-      short 30s window / 15s watermark (vs. a more realistic multi-minute production
-      window) so results actually appear within a VM demo's timeframe. `to_kafka_rows()`
-      was pulled out of `prediction_stream.py` into `src/common/spark_utils.py` so both
-      streaming modules share it instead of duplicating it. Pure transformation logic
-      (`parse_events`, `split_valid_and_dead_letters`, `add_experience_range`, the three
-      `build_*` aggregate functions) unit-tested in `tests/test_analytics_stream.py`
-      against batch DataFrames (windowed `groupBy` works identically in batch — only
-      `withWatermark` is streaming-only, and it's a no-op in batch mode).
-      `notebooks/run_analytics_stream.ipynb` runs it against real Kafka, same
-      Kafka-enabled-launch requirement as `run_prediction_stream.ipynb`, and documents
-      running `run_dataset_producer.ipynb` concurrently to actually feed it events.
-      **Confirmed end-to-end on the VM (2026-08-18)**: with the dataset producer run at
-      `LIMIT=90, DELAY_SECONDS=1` (90s of event-time span, comfortably past the 30s
-      window + 15s watermark), all three aggregates landed on `salary_analytics` — 167
-      total records: 77 `salary_breakdown`, 3 `event_counts` (30 events per closed
-      window), 87 `technology_counts`. First attempt (at the producer notebook's smaller
-      defaults, `LIMIT=20, DELAY_SECONDS=0.5` = only 10s of event-time span) correctly
-      produced 0 records — not a bug, just not enough event-time span for the watermark
-      to ever pass a window's end; documents the real timing tradeoff of short demo
-      windows for whoever runs this next.
+- [x] ~~7.2 `src/streaming/analytics_stream.py`~~ **Built (2026-08-18): read
+      `developer_events`, routed malformed records to `salary_dead_letter`, published
+      three windowed aggregates (`event_counts`, `salary_breakdown`, `technology_counts`)
+      to `salary_analytics`. Confirmed end-to-end on the VM the same day — 167 real
+      records (77 `salary_breakdown`, 3 `event_counts`, 87 `technology_counts`) via
+      `notebooks/run_analytics_stream.ipynb`, with `run_dataset_producer.ipynb` feeding
+      it. Dropped entirely by explicit decision (2026-08-20), along with its dashboard/
+      report-notebook consumers — see §17.** Deleted:
+      `src/streaming/analytics_stream.py`, `notebooks/run_analytics_stream.ipynb`,
+      `tests/test_analytics_stream.py`; `KAFKA_ANALYTICS_TOPIC`/
+      `ANALYTICS_CHECKPOINT_PATH` removed from `config/settings.py`/`.env.example`.
+      `to_kafka_rows()` (pulled into `src/common/spark_utils.py` to be shared by this
+      module and `prediction_stream.py`) stays - `prediction_stream.py` still uses it.
 - [ ] 7.3 `scripts/start_prediction_stream.sh` (the CLI wrapper around
       `python -m src.streaming.prediction_stream`) — still not started. **Added instead
       (2026-08-15):** `scripts/start_kafka_jupyter.sh`, launching Jupyter through
       `pyspark --packages ...` (§23 #22's fix) so `notebooks/run_prediction_stream.ipynb`
-      has a working Kafka-enabled session without retyping the launch command each time
+      had a working Kafka-enabled session without retyping the launch command each time.
+      **Superseded (2026-08-20):** the underlying fix was moved into the VM's own Spark
+      configuration directly (so a plain `pyspark`/`jupyter` launch has the Kafka
+      connector available automatically, no special command needed at all), making the
+      wrapper script unnecessary - deleted. Notebooks' preflight-check cells now just
+      sanity-check connector availability rather than pointing at a launch script.
 - [ ] 7.4 `src/producers/prediction_request_producer.py` — not started as a standalone
       script, but `notebooks/run_prediction_stream.ipynb` now has a working
       `confluent_kafka`-based test-request publisher (§5 of that notebook) that could be
@@ -1353,11 +1373,11 @@ work through together. Checked items are done; unchecked items are next.
       `salary_dead_letter` instead (reproduced twice) — see §23 #23 for the full
       request/response JSON
 - **Completion check:** Spark consumes and publishes valid results — **met and
-  confirmed against real Kafka** for both halves of this phase: the prediction stream
-  (happy path + dead-letter path) and the analytics stream (all three windowed
-  aggregates, 167 real records). All of Phase 7 is now done and VM-confirmed.
+  confirmed against real Kafka** for the prediction stream (7.1, happy path +
+  dead-letter path, still active). The analytics stream (7.2) met this same bar before
+  being dropped by decision (§17) - not a completion-check failure.
 
-### Phase 8 — Analytics & Model Validation Notebook (replaces the Dashboard)
+### Phase 8 — Dashboard / Analytics Report — dropped
 - [x] ~~8.1 `src/dashboard/app.py` — personal prediction page~~ **Built, ran into a
       string of environment issues on the VM (missing `streamlit` binary, a numpy/pandas
       ABI mismatch, a `sys.path` bug, then a real `to_json()` null-dropping bug once it
@@ -1365,21 +1385,21 @@ work through together. Checked items are done; unchecked items are next.
       regardless), then dropped by request (2026-08-18) - deleted (`src/dashboard/`,
       `scripts/start_dashboard.sh`, `streamlit` removed from `requirements.txt`).**
 - [x] ~~8.2 Descriptive analytics page~~ **Replaced by
-      `notebooks/run_analytics_report.ipynb` Part A** (2026-08-18): same content (avg
-      salary by country/role/experience/technology, salary distribution, total events
-      processed), as matplotlib charts read from a `salary_analytics` snapshot instead of
-      a live dashboard page.
-- [x] 8.3 (new, 2026-08-18) `notebooks/run_analytics_report.ipynb` Part B — **prediction
-      vs. real salary**: takes real historical rows from `developer_events` (which carry
-      the actual `ConvertedCompYearly`), scores them directly with the trained
-      `PipelineModel` (no Kafka round-trip through `salary_requests`/`salary_predictions`
-      needed - doesn't depend on `run_prediction_stream.ipynb` running), and plots
-      predicted vs. real salary with mean absolute/percentage error. Explicitly caveated
-      in the notebook as a sanity check on training-adjacent data, not a substitute for
-      `models/model_metrics.json`'s actual held-out test-set metrics.
-- **Completion check:** replaced the dashboard's "does a request return a prediction"
-  check with something that needed no live dashboard process at all - not yet run on the
-  VM.
+      `notebooks/run_analytics_report.ipynb` Part A** (2026-08-18), then that notebook
+      was **also dropped by explicit decision (2026-08-20)** after hitting its own
+      numpy/matplotlib environment issues on the VM. Deleted (`matplotlib` removed from
+      `requirements.txt` at the time - later re-added, see below).
+- [x] ~~8.3 `notebooks/run_analytics_report.ipynb` Part B — prediction vs. real salary~~
+      **Deleted along with the rest of the notebook (2026-08-20), then re-created in a
+      different location** - `run_prediction_stream.ipynb` Section 8 does the same
+      real-vs-predicted comparison (§17), which is why `matplotlib` is back in
+      `requirements.txt`.
+- **Completion check:** N/A — this phase is dropped, not deferred. Phase 7.1
+  (`prediction_stream.py`) remains done and VM-confirmed on its own (Phase 7.2 was also
+  dropped, §24 Phase 7); nothing currently visualizes `salary_analytics` (topic itself
+  unused now) or lets you type in a profile and get a prediction outside the raw Kafka
+  topics themselves - but real-vs-predicted salary comparison lives on in
+  `run_prediction_stream.ipynb` Section 8.
 
 ### Phase 9 — Testing and documentation
 - [ ] 9.1 Remaining tests: `test_model_selection.py`, `test_prediction_flow.py`

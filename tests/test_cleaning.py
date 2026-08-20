@@ -141,6 +141,27 @@ def test_clean_dataset_drops_implausibly_high_salaries(spark):
     assert cleaned.first()["label"] == float(settings.MAX_PLAUSIBLE_SALARY)
 
 
+def test_clean_dataset_drops_implausibly_low_salaries(spark):
+    # Regression test for the §10.9 revision (2026-08-20): a real developer_events row
+    # with ConvertedCompYearly = $14 survived cleaning entirely, since label > 0 (step 7)
+    # doesn't catch it - found via run_prediction_stream.ipynb's real-vs-predicted check.
+    base = (
+        "USA", "25-34 years old", "Bachelor's", "Employed, full-time", "Remote", "5",
+        "Developer", "20 to 99 employees", "Other", "Python;SQL", "PostgreSQL", "AWS",
+    )
+    rows = [
+        base + (str(settings.MIN_PLAUSIBLE_SALARY),),  # at the floor: kept
+        base + (str(settings.MIN_PLAUSIBLE_SALARY - 1),),  # just under: dropped
+        base + ("14",),  # the real case that motivated this: dropped
+    ]
+    df = spark.createDataFrame(rows, schema=RAW_SCHEMA)
+
+    cleaned = clean_dataset(df)
+
+    assert cleaned.count() == 1
+    assert cleaned.first()["label"] == float(settings.MIN_PLAUSIBLE_SALARY)
+
+
 def test_clean_dataset_deduplicates_rows(spark):
     row = (
         "USA", "25-34 years old", "Bachelor's", "Employed, full-time", "Remote", "5",

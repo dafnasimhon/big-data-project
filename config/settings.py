@@ -41,7 +41,6 @@ KAFKA_REQUEST_TOPIC = _env("KAFKA_REQUEST_TOPIC", "salary_requests")
 KAFKA_PREDICTION_TOPIC = _env("KAFKA_PREDICTION_TOPIC", "salary_predictions")
 KAFKA_DATASET_TOPIC = _env("KAFKA_DATASET_TOPIC", "developer_events")
 KAFKA_DEAD_LETTER_TOPIC = _env("KAFKA_DEAD_LETTER_TOPIC", "salary_dead_letter")
-KAFKA_ANALYTICS_TOPIC = _env("KAFKA_ANALYTICS_TOPIC", "salary_analytics")
 
 # Spark
 SPARK_MASTER_URL = _env("SPARK_MASTER_URL", "local[*]")
@@ -85,9 +84,6 @@ MODEL_METRICS_PATH = _env_path("MODEL_METRICS_PATH", "./models/model_metrics.jso
 PREDICTION_CHECKPOINT_PATH = _env_path(
     "PREDICTION_CHECKPOINT_PATH", "./checkpoints/salary_predictions"
 )
-ANALYTICS_CHECKPOINT_PATH = _env_path(
-    "ANALYTICS_CHECKPOINT_PATH", "./checkpoints/developer_events"
-)
 DEAD_LETTER_CHECKPOINT_PATH = _env_path(
     "DEAD_LETTER_CHECKPOINT_PATH", "./checkpoints/salary_dead_letter"
 )
@@ -107,7 +103,14 @@ TOP_EMPLOYMENT_STATUSES = _env_int("TOP_EMPLOYMENT_STATUSES", 10)
 # annual salary (p99 in this dataset is ~$400K) - a domain-judgment call, not derived
 # from the data itself, so it's configurable rather than hardcoded.
 MAX_PLAUSIBLE_SALARY = _env_int("MAX_PLAUSIBLE_SALARY", 1_000_000)
+# Same idea as MAX_PLAUSIBLE_SALARY, but for the low end - added 2026-08-20 after
+# notebooks/run_prediction_stream.ipynb's real-vs-predicted comparison surfaced a real
+# `developer_events` row with `ConvertedCompYearly = $14`, which `label > 0` (§10 step 7)
+# lets through untouched since $14 is technically positive. $1,000/year is a generous
+# floor - low enough that any conceivably real annual salary from even the lowest
+# cost-of-living countries in this global survey stays in, while excluding obvious
+# data-entry artifacts like $14. Also a domain-judgment call, not derived from the data.
+MIN_PLAUSIBLE_SALARY = _env_int("MIN_PLAUSIBLE_SALARY", 1_000)
 
-# Producer / dashboard behavior
+# Producer behavior
 DATASET_EVENT_DELAY_SECONDS = _env_int("DATASET_EVENT_DELAY_SECONDS", 2)
-DASHBOARD_PREDICTION_TIMEOUT_SECONDS = _env_int("DASHBOARD_PREDICTION_TIMEOUT_SECONDS", 30)

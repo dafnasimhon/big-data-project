@@ -43,6 +43,13 @@ documented in PLAN.md §23 "Known issues":
     training `RandomForestRegressor` on the VM). Step 6's "Unknown" fill-in and step 2's
     missing-value handling both already treat it identically to the other multi-value
     columns since it's just in the list now — no special-casing needed here.
+  - Step 9's implausible-value filter now has a low end too (`MIN_PLAUSIBLE_SALARY`,
+    2026-08-20), not just the high-end `MAX_PLAUSIBLE_SALARY` cap. Found via
+    `notebooks/run_prediction_stream.ipynb`'s real-vs-predicted comparison against real
+    `developer_events`: a row with `ConvertedCompYearly = $14` survived cleaning
+    entirely (step 7's `label > 0` check is satisfied by $14) and threw off that
+    comparison. Same treatment as the high-end cap — a documented, configurable
+    domain-judgment call, not derived from the data.
 """
 
 from pyspark.sql import DataFrame
@@ -122,10 +129,17 @@ def clean_dataset(raw_df: DataFrame) -> DataFrame:
     # Step 8: outlier investigation (diagnostic, on the data about to be filtered below).
     log_outlier_diagnostics(df)
 
-    # Step 9: drop implausible extreme values, then log1p the rest (decision documented
-    # in the module docstring / PLAN.md §23).
-    df = df.filter(F.col("label") <= settings.MAX_PLAUSIBLE_SALARY)
-    df = _log_row_count(df, f"filtering label > {settings.MAX_PLAUSIBLE_SALARY} as implausible (step 9)")
+    # Step 9: drop implausible extreme values (both ends), then log1p the rest (decision
+    # documented in the module docstring / PLAN.md §23).
+    df = df.filter(
+        (F.col("label") >= settings.MIN_PLAUSIBLE_SALARY)
+        & (F.col("label") <= settings.MAX_PLAUSIBLE_SALARY)
+    )
+    df = _log_row_count(
+        df,
+        f"filtering label outside [{settings.MIN_PLAUSIBLE_SALARY}, "
+        f"{settings.MAX_PLAUSIBLE_SALARY}] as implausible (step 9)",
+    )
     df = df.withColumn("log_label", F.log1p(F.col("label")))
 
     # Step 6: fill missing categorical/multi-value values with 'Unknown'.

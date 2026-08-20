@@ -2,8 +2,11 @@
 
 Replays the survey CSV row-by-row onto `developer_events`, at a configurable delay, to
 simulate a live feed of incoming developer profiles rather than a static batch file.
-Downstream, `src/streaming/analytics_stream.py` (Phase 7.2, not yet built) will consume
-this topic for real-time aggregates.
+Downstream, `notebooks/run_prediction_stream.ipynb`'s Section 8 reads these events back
+(they carry the real `ConvertedCompYearly` from the source row) to compare the trained
+model's predictions against real salaries. (An earlier windowed-aggregation consumer,
+`src/streaming/analytics_stream.py`/Phase 7.2, was built, confirmed working, and then
+dropped by decision on 2026-08-20 - this producer is unaffected either way.)
 
 Deliberately plain Python, not Spark: reads the CSV with the standard library's `csv`
 module, one row at a time, so memory use stays flat regardless of file size, and uses a
